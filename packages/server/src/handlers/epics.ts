@@ -106,7 +106,7 @@ async function buildEpicHierarchy(options: BdOptions = {}): Promise<Epic[]> {
   // Step 1: Get ALL beads in one call (includes parent field)
   const allBeads = await listBeads(readOptions)
 
-  const hierarchicalTypes = new Set(["epic", "convoy", "molecule"])
+  const hierarchicalTypes = new Set(["epic", "milestone", "convoy", "molecule"])
   const epicBeads = allBeads.filter((b) => hierarchicalTypes.has(b.issue_type))
   const nonEpicBeads = allBeads.filter((b) => !hierarchicalTypes.has(b.issue_type))
 
@@ -279,7 +279,7 @@ async function buildEpicHierarchy(options: BdOptions = {}): Promise<Epic[]> {
     const childBelowNonEpic = belowNonEpic || !hierarchicalTypes.has(bead.type)
     bead.children?.forEach((child) => normalizeNestedEpics(child, childBelowNonEpic))
     if ("childEpics" in bead) {
-      (bead as Epic).childEpics?.forEach((child) => normalizeNestedEpics(child, childBelowNonEpic))
+      ;(bead as Epic).childEpics?.forEach((child) => normalizeNestedEpics(child, childBelowNonEpic))
     }
   }
   topLevelEpics.forEach((epic) => normalizeNestedEpics(epic))
@@ -382,12 +382,20 @@ async function fullRebuild(options: BdOptions): Promise<EpicResult> {
 }
 
 // Incremental refresh: detect change scope and take the fastest path.
-export async function incrementalRefresh(dbPath?: string, includeSystem = false): Promise<EpicResult> {
+export async function incrementalRefresh(
+  dbPath?: string,
+  includeSystem = false,
+): Promise<EpicResult> {
   const options: BdOptions = { ...(dbPath ? { db: dbPath } : {}), includeSystem }
   const dbKey = dbPath ?? ""
 
   try {
-    if (!hasCachedResult() || getCachedDbPath() !== dbKey || getCachedIncludeSystem() !== includeSystem) return fullRebuild(options)
+    if (
+      !hasCachedResult() ||
+      getCachedDbPath() !== dbKey ||
+      getCachedIncludeSystem() !== includeSystem
+    )
+      return fullRebuild(options)
 
     const cachedParts = getCachedFingerprintParts()
     if (!cachedParts) return fullRebuild(options)

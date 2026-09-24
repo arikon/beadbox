@@ -264,6 +264,10 @@ export function useBeadActions(opts: UseBeadActionsOpts) {
 
       // Check if the bead is in backlog or archive
       const bead = findBead(beadId, [...epics, ...backlogEpics, ...archivedEpics, ...archivedBeads])
+      if (targetEpicId === "_standalone" && bead?.type === "milestone") {
+        toast("Milestones stay in Milestones")
+        return
+      }
       const isInBacklog = bead?.priority === "backlog"
       const isInArchive = bead?.labels?.includes("archived")
 
@@ -277,7 +281,13 @@ export function useBeadActions(opts: UseBeadActionsOpts) {
       // null so the equality matches newParentId's null sentinel for the
       // _toplevel/_standalone targets.
       const currentParentId = bead?.parentId ?? null
-      if (bead && currentParentId === newParentId && !demoteToTask && !isInBacklog && !isInArchive) {
+      if (
+        bead &&
+        currentParentId === newParentId &&
+        !demoteToTask &&
+        !isInBacklog &&
+        !isInArchive
+      ) {
         toast("Already in this epic")
         return
       }
@@ -301,7 +311,11 @@ export function useBeadActions(opts: UseBeadActionsOpts) {
         }
 
         // Promote to epic if dropping on "Make top-level epic"
-        if (targetEpicId === "_toplevel" && bead?.type !== "epic") {
+        if (
+          targetEpicId === "_toplevel" &&
+          bead &&
+          !["epic", "milestone", "convoy", "molecule"].includes(bead.type)
+        ) {
           await trackedAction("updateBeadType", () =>
             updateBeadType(beadId, "epic", currentWorkspace?.databasePath),
           )
