@@ -7,7 +7,7 @@
 
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test"
 import * as beads from "../handlers/beads"
-import { createBdWorkspace, type Workspace } from "./fixtures/bd-workspace"
+import { createBdWorkspace, runBdInWorkspace, type Workspace } from "./fixtures/bd-workspace"
 
 setDefaultTimeout(30_000)
 
@@ -74,6 +74,27 @@ describe("handlers/beads (mutator return shape)", () => {
       ws.dbPath,
     )
     expect(r.success).toBe(true)
+  })
+
+  test("text fields can be saved independently and cleared", async () => {
+    const id = ws.seedIds.test2
+    for (const [field, value] of [
+      ["description", "Description from editor"],
+      ["acceptanceCriteria", "Criteria from editor"],
+      ["notes", "Notes from editor"],
+    ] as const) {
+      expect((await beads.updateBeadTextField(id, field, value, ws.dbPath)).success).toBe(true)
+    }
+    const read = async () => JSON.parse(await runBdInWorkspace(["show", id, "--json"], ws.root))[0]
+    const saved = await read()
+    expect(saved.description).toBe("Description from editor")
+    expect(saved.acceptance_criteria).toBe("Criteria from editor")
+    expect(saved.notes).toBe("Notes from editor")
+
+    expect((await beads.updateBeadTextField(id, "notes", "", ws.dbPath)).success).toBe(true)
+    const cleared = await read()
+    expect(cleared.notes ?? "").toBe("")
+    expect(cleared.description).toBe("Description from editor")
   })
 
   test("addLabelAction + removeLabelAction round-trip", async () => {
