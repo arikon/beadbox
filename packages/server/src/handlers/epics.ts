@@ -107,7 +107,7 @@ async function buildEpicHierarchy(options: BdOptions = {}): Promise<Epic[]> {
   // Step 1: Get ALL beads in one call (includes parent field)
   const allBeads = await listBeads(readOptions)
 
-  const hierarchicalTypes = new Set(["epic", "convoy"])
+  const hierarchicalTypes = new Set(["epic", "milestone", "convoy"])
   const epicBeads = allBeads.filter((b) => hierarchicalTypes.has(b.issue_type))
   const nonEpicBeads = allBeads.filter((b) => !hierarchicalTypes.has(b.issue_type))
 
@@ -154,7 +154,11 @@ async function buildEpicHierarchy(options: BdOptions = {}): Promise<Epic[]> {
     epicsWithDependents.map((e) => [e.id, e.dependents || []]),
   )
 
+  const epicMap = new Map<string, Epic>()
+
   function buildBeadWithChildren(bdBead: BdBead, depth: number = 0): Bead {
+    const nestedEpic = epicMap.get(bdBead.id)
+    if (nestedEpic) return nestedEpic
     const baseBead = convertBead(bdBead)
     if (depth >= 5) return baseBead
 
@@ -167,18 +171,20 @@ async function buildEpicHierarchy(options: BdOptions = {}): Promise<Epic[]> {
     }
   }
 
-  const epicMap = new Map<string, Epic>()
   const childEpicIds = new Set<string>()
 
   for (const bdEpic of epicsWithDependents) {
+    const converted = convertBead(bdEpic)
     const epic: Epic = {
-      ...convertBead(bdEpic),
+      ...converted,
       type:
-        bdEpic.issue_type === "convoy"
-          ? "convoy"
-          : bdEpic.id.includes("-mol-") && bdEpic.issue_type === "epic"
-            ? "molecule"
-            : "epic",
+        bdEpic.issue_type === "milestone"
+          ? "milestone"
+          : bdEpic.issue_type === "convoy"
+            ? "convoy"
+            : bdEpic.id.includes("-mol-") && bdEpic.issue_type === "epic"
+              ? "molecule"
+              : "epic",
       children: [],
       childEpics: [],
     }
@@ -209,7 +215,11 @@ async function buildEpicHierarchy(options: BdOptions = {}): Promise<Epic[]> {
     }
   }
 
-  const topLevelEpics = Array.from(epicMap.values()).filter((e) => !childEpicIds.has(e.id))
+  const topLevelEpics = Array.from(epicMap.values()).filter((e) => {
+    if (childEpicIds.has(e.id)) return false
+    const parent = e.parentId ? beadById.get(e.parentId) : undefined
+    return !parent || hierarchicalTypes.has(parent.issue_type)
+  })
 
   const beadsUnderEpics = new Set<string>()
   for (const bdEpic of epicsWithDependents) {
@@ -260,6 +270,25 @@ async function buildEpicHierarchy(options: BdOptions = {}): Promise<Epic[]> {
     }
     topLevelEpics.push(orphanEpic)
   }
+
+  // Generic Bead consumers traverse `children`, while top-level Epic consumers
+  // traverse `childEpics`. Once an epic is nested below a non-epic issue, keep
+  // the entire descendant branch on `children` so both tree views can reach it.
+  function normalizeNestedEpics(bead: Bead, belowNonEpic = false): void {
+    if (belowNonEpic && "childEpics" in bead) {
+      const epic = bead as Epic
+      epic.children.push(...(epic.childEpics ?? []))
+      epic.childEpics = []
+    }
+    const childBelowNonEpic = belowNonEpic || !hierarchicalTypes.has(bead.type)
+    for (const child of bead.children ?? []) normalizeNestedEpics(child, childBelowNonEpic)
+    if ("childEpics" in bead) {
+      for (const child of (bead as Epic).childEpics ?? []) {
+        normalizeNestedEpics(child, childBelowNonEpic)
+      }
+    }
+  }
+  for (const epic of topLevelEpics) normalizeNestedEpics(epic)
 
   // Attach rigName from routes.jsonl (Gastown multi-rig workspaces)
   const dbPath = options.db || process.cwd()

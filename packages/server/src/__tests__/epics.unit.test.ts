@@ -146,3 +146,141 @@ describe("handlers/epics — non-epic parent's children via bead.parent (beadbox
     expect(cachedTest1?.children?.find((c) => c.id === ws2.seedIds.test2)).toBeDefined()
   })
 })
+
+describe("handlers/epics — milestone hierarchy", () => {
+  let milestoneWorkspace: Workspace
+
+  beforeAll(async () => {
+    milestoneWorkspace = await createBdWorkspace()
+  })
+
+  afterAll(async () => {
+    await milestoneWorkspace?.cleanup()
+  })
+
+  test("milestone contains its epic and task once; an empty milestone remains a root", async () => {
+    const milestone = JSON.parse(
+      await runBdInWorkspace(
+        ["create", "Milestone parent", "--type", "milestone", "--json"],
+        milestoneWorkspace.root,
+      ),
+    ) as { id: string }
+    const emptyMilestone = JSON.parse(
+      await runBdInWorkspace(
+        ["create", "Empty milestone", "--type", "milestone", "--json"],
+        milestoneWorkspace.root,
+      ),
+    ) as { id: string }
+    await runBdInWorkspace(
+      ["update", milestoneWorkspace.seedIds.epic1, "--parent", milestone.id],
+      milestoneWorkspace.root,
+    )
+
+    const result = await epics.getEpics(milestoneWorkspace.dbPath)
+    expect(result.success).toBe(true)
+    if (!result.success) return
+
+    const root = result.epics.find((epic) => epic.id === milestone.id)
+    const nestedEpic = root?.childEpics?.find(
+      (epic) => epic.id === milestoneWorkspace.seedIds.epic1,
+    )
+    expect(root?.type).toBe("milestone")
+    expect(nestedEpic?.type).toBe("epic")
+    expect(nestedEpic?.children.map((bead) => bead.id)).toContain(milestoneWorkspace.seedIds.test1)
+    expect(result.epics.find((epic) => epic.id === emptyMilestone.id)).toMatchObject({
+      type: "milestone",
+      children: [],
+      childEpics: [],
+    })
+
+    type TreeNode = { id: string; children?: TreeNode[]; childEpics?: TreeNode[] }
+    const allIds = result.epics.flatMap(function visit(node: TreeNode): string[] {
+      return [
+        node.id,
+        ...(node.children ?? []).flatMap(visit),
+        ...(node.childEpics ?? []).flatMap(visit),
+      ]
+    })
+    for (const id of [
+      milestone.id,
+      emptyMilestone.id,
+      milestoneWorkspace.seedIds.epic1,
+      milestoneWorkspace.seedIds.test1,
+    ]) {
+      expect(allIds.filter((seen) => seen === id)).toHaveLength(1)
+    }
+  })
+})
+
+describe("handlers/epics — epic below a non-epic parent", () => {
+  let nestedWorkspace: Workspace
+
+  beforeAll(async () => {
+    nestedWorkspace = await createBdWorkspace()
+  })
+
+  afterAll(async () => {
+    await nestedWorkspace?.cleanup()
+  })
+
+  test("decision → epic → nested epic → task appears once at every level", async () => {
+    const decision = JSON.parse(
+      await runBdInWorkspace(
+        ["create", "Decision parent", "--type", "decision", "--json"],
+        nestedWorkspace.root,
+      ),
+    ) as { id: string }
+    const nestedEpic = JSON.parse(
+      await runBdInWorkspace(
+        ["create", "Nested epic", "--type", "epic", "--json"],
+        nestedWorkspace.root,
+      ),
+    ) as { id: string }
+    await runBdInWorkspace(
+      ["update", nestedWorkspace.seedIds.epic1, "--parent", decision.id],
+      nestedWorkspace.root,
+    )
+    await runBdInWorkspace(
+      ["update", nestedEpic.id, "--parent", nestedWorkspace.seedIds.epic1],
+      nestedWorkspace.root,
+    )
+    await runBdInWorkspace(
+      ["update", nestedWorkspace.seedIds.test1, "--parent", nestedEpic.id],
+      nestedWorkspace.root,
+    )
+
+    const result = await epics.getEpics(nestedWorkspace.dbPath)
+    expect(result.success).toBe(true)
+    if (!result.success) return
+
+    const standalone = result.epics.find((epic) => epic.id === "_standalone")
+    const decisionNode = standalone?.children.find((bead) => bead.id === decision.id)
+    const epicNode = decisionNode?.children?.find(
+      (bead) => bead.id === nestedWorkspace.seedIds.epic1,
+    )
+    const nestedEpicNode = epicNode?.children?.find((bead) => bead.id === nestedEpic.id)
+    expect(epicNode?.type).toBe("epic")
+    expect(nestedEpicNode?.type).toBe("epic")
+    expect(nestedEpicNode?.children?.map((bead) => bead.id)).toContain(
+      nestedWorkspace.seedIds.test1,
+    )
+    expect((epicNode as typeof standalone | undefined)?.childEpics).toHaveLength(0)
+
+    type TreeNode = { id: string; children?: TreeNode[]; childEpics?: TreeNode[] }
+    const allIds = result.epics.flatMap(function visit(node: TreeNode): string[] {
+      return [
+        node.id,
+        ...(node.children ?? []).flatMap(visit),
+        ...(node.childEpics ?? []).flatMap(visit),
+      ]
+    })
+    for (const id of [
+      decision.id,
+      nestedWorkspace.seedIds.epic1,
+      nestedEpic.id,
+      nestedWorkspace.seedIds.test1,
+    ]) {
+      expect(allIds.filter((seen) => seen === id)).toHaveLength(1)
+    }
+  })
+})

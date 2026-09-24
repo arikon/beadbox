@@ -192,6 +192,7 @@ export interface BdBead {
     | "feature"
     | "task"
     | "epic"
+    | "milestone"
     | "chore"
     | "message"
     | "gate"
@@ -925,6 +926,7 @@ const BEAD_TYPE_BY_NAME: Readonly<Record<string, import("./types").BeadType>> = 
   bug: "bug",
   feature: "feature",
   epic: "epic",
+  milestone: "milestone",
   chore: "chore",
   message: "message",
   gate: "gate",

@@ -3,6 +3,7 @@ export type BeadType =
   | "task"
   | "feature"
   | "epic"
+  | "milestone"
   | "chore"
   | "message"
   | "gate"
@@ -64,7 +65,7 @@ export interface Bead {
 }
 
 export interface Epic extends Bead {
-  type: "epic" | "convoy" | "molecule"
+  type: "epic" | "milestone" | "convoy" | "molecule"
   children: Bead[]
   childEpics?: Epic[]
 }

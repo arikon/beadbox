@@ -8,6 +8,7 @@ import {
   ChevronDown,
   ChevronRight,
   FileText,
+  Flag,
   Ghost,
   GitMerge,
   Hexagon,
@@ -517,6 +518,11 @@ const typeConfig: Record<BeadType, BadgeConfig> = {
     label: "Epic",
     className: "bg-amber-500/20 text-amber-400 border-amber-500/40",
     icon: <Layers className="h-3 w-3" />,
+  },
+  milestone: {
+    label: "Milestone",
+    className: "bg-sky-500/20 text-sky-400 border-sky-500/40",
+    icon: <Flag className="h-3 w-3" />,
   },
   chore: {
     label: "Chore",
