@@ -34,6 +34,9 @@ describe("issue type display", () => {
     render(<BeadDetailPanel bead={bead} onClose={() => {}} onUpdate={() => {}} onAddComment={() => {}} availableTypes={["task", "decision"]} typeCatalogReady={false} />)
     const typeButton = screen.getByRole("button", { name: "decision" }) as HTMLButtonElement
     expect(typeButton.disabled).toBe(true)
+    expect(screen.getByRole("button", { name: "Edit Description" })).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Edit Acceptance Criteria" })).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Edit Notes" })).toBeTruthy()
   })
 
   test("recognizes real and legacy molecule roots without changing their type", () => {
