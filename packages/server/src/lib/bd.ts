@@ -1310,7 +1310,7 @@ export async function getAllBlocksDependencies(
   if (isEmbeddedMode(options.db)) return new Map()
 
   try {
-    const sql = `SELECT issue_id, depends_on_id FROM dependencies WHERE type = 'blocks'`
+    const sql = `SELECT issue_id, depends_on_issue_id AS depends_on_id FROM dependencies WHERE type = 'blocks'`
     const rows = isServerOnlyWithoutScaffold(options.db)
       ? await serverSqlQuery<{ issue_id: string; depends_on_id: string }>(sql, options)
       : await bdExec<Array<{ issue_id: string; depends_on_id: string }>>(["sql", sql], options)
