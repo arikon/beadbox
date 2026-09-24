@@ -126,13 +126,24 @@ export function useWorkspaceLifecycle(opts: UseWorkspaceLifecycleOpts) {
   const [availableTypes, setAvailableTypes] = useState<string[]>([])
   const [typeCatalog, setTypeCatalog] = useState<{
     workspaceId: string
-    status: "loading" | "ready" | "error"
+    status: "loading" | "retrying" | "ready" | "error"
     message?: string
   } | null>(null)
-  const typeCatalogReady = !!typeCatalog && typeCatalog.workspaceId === currentWorkspace?.id && typeCatalog.status === "ready"
-  const typeCatalogError = typeCatalog && typeCatalog.workspaceId === currentWorkspace?.id && typeCatalog.status === "error"
-    ? typeCatalog.message ?? "Could not load issue types"
-    : null
+  const typeCatalogReady =
+    !!typeCatalog &&
+    typeCatalog.workspaceId === currentWorkspace?.id &&
+    typeCatalog.status === "ready"
+  const typeCatalogRetrying =
+    !!typeCatalog &&
+    typeCatalog.workspaceId === currentWorkspace?.id &&
+    typeCatalog.status === "retrying"
+  const typeCatalogError =
+    typeCatalog &&
+    typeCatalog.workspaceId === currentWorkspace?.id &&
+    (typeCatalog.status === "error" || typeCatalog.status === "retrying")
+      ? (typeCatalog.message ?? "Could not load issue types")
+      : null
+  const typeCatalogRequestRef = useRef(0)
   const [isLoading, setIsLoading] = useState(true)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [loadingWorkspaceId, setLoadingWorkspaceId] = useState<string | null>(null)
@@ -783,6 +794,35 @@ export function useWorkspaceLifecycle(opts: UseWorkspaceLifecycleOpts) {
     }
   }, [loadEpics, isRefreshing, clearAutoRetry])
 
+  const fetchAvailableTypes = useCallback(async (workspace: Workspace, retry = false) => {
+    const request = ++typeCatalogRequestRef.current
+    setTypeCatalog((previous) => ({
+      workspaceId: workspace.id,
+      status: retry ? "retrying" : "loading",
+      message: retry && previous?.workspaceId === workspace.id ? previous.message : undefined,
+    }))
+    if (!retry) setAvailableTypes([])
+    try {
+      const types = await rpc.beads.getAvailableTypes(workspace.databasePath)
+      if (typeCatalogRequestRef.current !== request) return
+      setAvailableTypes(types)
+      setTypeCatalog({ workspaceId: workspace.id, status: "ready" })
+    } catch (error) {
+      if (typeCatalogRequestRef.current !== request) return
+      setAvailableTypes([])
+      setTypeCatalog({
+        workspaceId: workspace.id,
+        status: "error",
+        message: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }, [])
+
+  const retryAvailableTypes = useCallback(() => {
+    if (!currentWorkspace || typeCatalogRetrying) return
+    void fetchAvailableTypes(currentWorkspace, true)
+  }, [currentWorkspace, typeCatalogRetrying, fetchAvailableTypes])
+
   useEffect(() => {
     if (currentWorkspace) {
       let active = true
@@ -802,31 +842,13 @@ export function useWorkspaceLifecycle(opts: UseWorkspaceLifecycleOpts) {
           if (active) setCustomStatusChain(chain)
         })
         .catch(() => {}) // The main load supplies the visible error state.
-      setAvailableTypes([])
-      setTypeCatalog({ workspaceId: currentWorkspace.id, status: "loading" })
-      Promise.resolve()
-        .then(() => rpc.beads.getAvailableTypes(currentWorkspace.databasePath))
-        .then((types) => {
-          if (active) {
-            setAvailableTypes(types)
-            setTypeCatalog({ workspaceId: currentWorkspace.id, status: "ready" })
-          }
-        })
-        .catch((error: unknown) => {
-          if (active) {
-            setAvailableTypes([])
-            setTypeCatalog({
-              workspaceId: currentWorkspace.id,
-              status: "error",
-              message: error instanceof Error ? error.message : String(error),
-            })
-          }
-        })
+      void fetchAvailableTypes(currentWorkspace)
       // Expose db path for console commands
       const beadbox = ensureBeadboxStamp()
       if (beadbox) beadbox.db = currentWorkspace.databasePath
       return () => {
         active = false
+        typeCatalogRequestRef.current++
       }
     }
     // bb-fvw2 defensive: depend on the workspace id and the dbPath
@@ -875,6 +897,8 @@ export function useWorkspaceLifecycle(opts: UseWorkspaceLifecycleOpts) {
     availableTypes,
     typeCatalogReady,
     typeCatalogError,
+    typeCatalogRetrying,
+    retryAvailableTypes,
     epics,
     setEpics,
     isLoading,
