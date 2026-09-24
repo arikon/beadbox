@@ -4,6 +4,7 @@ import { readFile } from "fs/promises"
 import mysql from "mysql2/promise"
 import { basename, dirname, join } from "path"
 import { classifyBdError } from "./bd-error"
+import { ensureExternalScaffold } from "./external-scaffold"
 import { __resetBdPathCache, COMMON_BD_PATHS, resolveBdPath as getBdPath } from "./bd-paths"
 import { getWorkspaceWriteMarkerPaths } from "./dolt-write-marker"
 import {
@@ -32,7 +33,7 @@ import type {
   MolProgressRaw,
   ServerDatabase,
 } from "./types"
-import { parseServerUri, type ServerConnection } from "./workspace-registry"
+import { findExternalWorkspaceByDbPath, parseServerUri, type ServerConnection } from "./workspace-registry"
 
 // Reset helpers are exported for test teardown only.
 // eslint-disable-next-line @typescript-eslint/no-empty-function
@@ -497,7 +498,7 @@ export function resolveDoltPortOverride(
 //
 // bb-fe03.4: lifted password / port resolution into resolveLocalDbPassword
 // + resolveDoltPortOverride; this orchestrator now stays well under CCN 15.
-function buildEnv(options: BdOptions): NodeJS.ProcessEnv | undefined {
+export function buildEnv(options: BdOptions): NodeJS.ProcessEnv | undefined {
   let env: NodeJS.ProcessEnv | undefined = options.env
     ? { ...process.env, ...options.env }
     : undefined
@@ -510,10 +511,25 @@ function buildEnv(options: BdOptions): NodeJS.ProcessEnv | undefined {
     return {
       ...(env ?? process.env),
       ...buildServerEnv(server, password),
+      BEADS_DOLT_AUTO_START: "0",
+      BEADS_DOLT_SERVER_MODE: "1",
     }
   }
 
   if (!options.db) return env
+
+  const externalWorkspace = findExternalWorkspaceByDbPath(options.db)
+  if (externalWorkspace?.server) {
+    const configuredServer = externalWorkspace.server
+    const serverKey = `${configuredServer.host}:${configuredServer.port}/${configuredServer.database}`
+    const password = workspacePasswords.get(serverKey)
+    return {
+      ...(env ?? process.env),
+      ...buildServerEnv(configuredServer, password),
+      BEADS_DOLT_AUTO_START: "0",
+      BEADS_DOLT_SERVER_MODE: "1",
+    }
+  }
 
   const password = resolveLocalDbPassword(options.db)
   if (password) {
@@ -1182,6 +1198,7 @@ export async function initServerScaffold(
     "init",
     flagArg("--prefix", server.database),
     "--server",
+    "--external",
     flagArg("--server-host", server.host),
     flagArg("--server-port", server.port.toString()),
     flagArg("--server-user", server.user),
@@ -1191,7 +1208,7 @@ export async function initServerScaffold(
     "--skip-agents",
     "--skip-hooks",
   ]
-  const env: NodeJS.ProcessEnv = { ...process.env }
+  const env: NodeJS.ProcessEnv = { ...process.env, BEADS_DOLT_AUTO_START: "0" }
   if (password) env.BEADS_DOLT_PASSWORD = password
 
   await execFileAsync(getBdPath(), args, {
@@ -1200,6 +1217,7 @@ export async function initServerScaffold(
     maxBuffer: 10 * 1024 * 1024,
     timeout: 30_000,
   })
+  await ensureExternalScaffold(join(scaffoldDir, ".beads"), server)
 }
 
 // Run a SQL query via mysql2 for server-only workspaces (server:// URIs).

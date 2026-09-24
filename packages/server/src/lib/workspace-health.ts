@@ -8,11 +8,14 @@ import { basename, dirname, join } from "path"
 import { getWorkspacePassword, initServerScaffold, stripBdWarnings } from "./bd"
 import { resolveBdPath } from "./bd-paths"
 import { drainPool } from "./dolt-pool"
+import { ensureExternalScaffold } from "./external-scaffold"
 import { execFileAsync } from "./exec"
 import type { HealthError } from "./startup-machine"
 import { compareVersions, MIN_BD_VERSION } from "./version-requirements"
 import {
   getBeadboxRegistryPath,
+  getServerOwnership,
+  isBeadboxScaffold,
   type RegistryEntry,
   resolveBdDbPath,
   updateWorkspaceLocal,
@@ -132,6 +135,18 @@ async function checkServerOnlyWorkspace(
   bdPath: string,
 ): Promise<HealthResult> {
   const s = workspace.server
+  if (isBeadboxScaffold(workspace)) {
+    try {
+      await ensureExternalScaffold(workspace.local!.path, s)
+    } catch (error) {
+      return {
+        ok: false,
+        error: { kind: "unknown", message: error instanceof Error ? error.message : String(error), bdOutput: "" },
+        bdVersion: bdResult.version,
+        bdPath,
+      }
+    }
+  }
   const serverKey = `${s.host}:${s.port}/${s.database}`
   const password = getWorkspacePassword(serverKey)
   let conn: mysql.Connection | undefined
@@ -156,6 +171,8 @@ async function checkServerOnlyWorkspace(
   } finally {
     await conn?.end().catch(() => {})
   }
+
+  if (workspace.local) return { ok: true, bdVersion: bdResult.version, bdPath }
 
   // MySQL connection succeeded. Create a local .beads/ scaffold so bd CLI
   // commands (list, show, config) work for data loading. Without this,
@@ -275,7 +292,7 @@ async function checkLocalWorkspace(
       `[ws:health] "${workspace.name}" → FAIL kind=${classified.kind} stderr=${stderr.slice(0, 200)} stdout=${stdout.slice(0, 200)}`,
     )
 
-    if (classified.kind === "server_unreachable" && workspace.local) {
+    if (classified.kind === "server_unreachable" && getServerOwnership(workspace) === "managed") {
       const recovered = await tryAutoRecoverDolt(workspace, bdPath, dbPath, healthEnv)
       if (recovered) return { ok: true, bdVersion: bdResult.version, bdPath }
     }
@@ -294,7 +311,7 @@ export async function checkHealth(workspace: RegistryEntry): Promise<HealthResul
   const versionFail = validateBdVersion(bdResult, bdPath)
   if (versionFail) return versionFail
 
-  if (workspace.local === null && workspace.server) {
+  if (workspace.server && getServerOwnership(workspace) !== "managed") {
     return checkServerOnlyWorkspace(
       workspace as RegistryEntry & { server: NonNullable<RegistryEntry["server"]> },
       bdResult,
