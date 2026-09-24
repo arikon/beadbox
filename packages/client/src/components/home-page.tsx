@@ -157,6 +157,8 @@ function BeadsEpicsViewer() {
     availableTypes,
     typeCatalogReady,
     typeCatalogError,
+    typeCatalogRetrying,
+    retryAvailableTypes,
     epics,
     setEpics,
     isLoading,
@@ -812,8 +814,16 @@ function BeadsEpicsViewer() {
         style={devConsole.open ? { marginBottom: devConsole.height } : undefined}
       >
         {typeCatalogError && (
-          <div role="alert" className="mb-3 rounded border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-300">
-            Could not load issue types: {typeCatalogError}. Type changes are unavailable.
+          <div role="alert" className="mb-3 flex items-center justify-between gap-3 rounded border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-300">
+            <span>Could not load issue types: {typeCatalogError}. Type changes are unavailable.</span>
+            <button
+              type="button"
+              onClick={retryAvailableTypes}
+              disabled={typeCatalogRetrying}
+              className="shrink-0 rounded px-2 py-1 font-medium hover:bg-amber-500/20 disabled:cursor-wait disabled:opacity-60"
+            >
+              {typeCatalogRetrying ? "Retrying…" : "Retry"}
+            </button>
           </div>
         )}
         {/* Filter bar: hidden on mobile when viewing bead detail, or when toggled off via Cmd+F */}

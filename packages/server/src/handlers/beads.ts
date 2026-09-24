@@ -82,6 +82,11 @@ export async function getAvailableStatuses(dbPath?: string): Promise<string[]> {
 // An older bd cannot provide an accurate list of valid edit targets.
 export async function getAvailableTypes(dbPath?: string): Promise<string[]> {
   const options: BdOptions = dbPath ? { db: dbPath } : {}
+  if (dbPath && (await readMetadataMode(dbPath)) === "server") {
+    // bd types only reads the catalog. Server-mode reads can run alongside
+    // detail requests instead of waiting behind their per-db CLI queue.
+    options.parallel = true
+  }
   try {
     return await bdGetAvailableTypes(options)
   } catch (error) {
