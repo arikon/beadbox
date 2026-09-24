@@ -49,8 +49,10 @@ function normalizeDbPathForDolt(dbPath: string): string {
  *   Fallback chain: metadata.json dolt_server_port -> registry port.
  */
 export function resolvePort(workspace: RegistryEntry): number | null {
-  // Server-only: registry is the source of truth
-  if (workspace.local === null) {
+  if (workspace.local === null) return workspace.server?.port ?? null
+  // External connections always use the registry endpoint, including when a
+  // local scaffold exists. Its port file may refer to an old connection.
+  if (workspace.server && getServerOwnership(workspace) !== "managed") {
     return workspace.server?.port ?? null
   }
 
@@ -157,6 +159,7 @@ async function checkServerOnlyWorkspace(
       database: s.database,
       user: s.user,
       password: password || undefined,
+      ssl: s.tls ? {} : undefined,
       connectTimeout: 5000,
     })
     await conn.query("SELECT 1")
