@@ -785,13 +785,23 @@ export function useWorkspaceLifecycle(opts: UseWorkspaceLifecycleOpts) {
 
   useEffect(() => {
     if (currentWorkspace) {
+      let active = true
       loadEpics()
       // Fetch available statuses for this workspace
-      rpc.beads.getAvailableStatuses(currentWorkspace.databasePath).then(setAvailableStatuses)
+      rpc.beads
+        .getAvailableStatuses(currentWorkspace.databasePath)
+        .then((statuses) => {
+          if (active) setAvailableStatuses(statuses)
+        })
+        .catch(() => {}) // loadEpics reports the transport error for this workspace.
       // beadbox-3qo: also fetch the ordered status.custom chain for the
       // workflow advancement button (pm/spec §4.3). Empty array = button hidden.
-      rpc.beads.getCustomStatusList(currentWorkspace.databasePath).then(setCustomStatusChain)
-      let active = true
+      rpc.beads
+        .getCustomStatusList(currentWorkspace.databasePath)
+        .then((chain) => {
+          if (active) setCustomStatusChain(chain)
+        })
+        .catch(() => {}) // The main load supplies the visible error state.
       setAvailableTypes([])
       setTypeCatalog({ workspaceId: currentWorkspace.id, status: "loading" })
       Promise.resolve()
