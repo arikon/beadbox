@@ -59,6 +59,25 @@ bun run dev
 bun run tauri:build
 ```
 
+To build and install a separate, locally signed macOS app without replacing
+`/Applications/Beadbox.app`, run:
+
+```sh
+bash scripts/build-install-local-macos.sh
+```
+
+This installs or updates `/Applications/Beadbox Local.app` with its own bundle
+identifier. The local signature is ad hoc; this build is not notarized. Launch
+it with the normal Beadbox workspace registry (`~/.beadbox/registry.json`):
+
+```sh
+open -n -a "/Applications/Beadbox Local.app"
+```
+
+The local app uses the same registered Beads workspaces and installed `bd` as
+the production app. Both apps can read and write those workspaces, so avoid
+editing the same issue from both windows at once.
+
 ## Architecture (short version)
 
 Beadbox is a Tauri v2 app. The Rust shell spawns a Bun sidecar process and talks to it over stdio (kkrpc) — the app opens no network ports. All issue data flows through the `bd` CLI; Beadbox never touches the database behind `bd`'s back. Live updates come from watching the workspace filesystem (local) or polling Dolt table hashes (server workspaces).
