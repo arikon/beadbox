@@ -82,7 +82,15 @@ editing the same issue from both windows at once.
 
 Beadbox is a Tauri v2 app. The Rust shell spawns a Bun sidecar process and talks to it over stdio (kkrpc). The app itself opens no network listener. The sidecar uses the `bd` CLI for writes and operations without an HTTP equivalent, and reads Dolt table hashes through SQL for server workspaces. Live updates come from watching the workspace filesystem (embedded) or polling Dolt table hashes in a separate worker (server workspaces).
 
-An opt-in read pilot (`BEADBOX_BD_SERVE_READS=1`) uses Beads 1.3.0 or newer to start one authenticated `bd serve` child for each actively used SQL-server workspace. Each child listens only on an ephemeral loopback port and is stopped with the sidecar; embedded workspaces remain on the CLI. Keep the pilot disabled until the performance and parity checks in the [workspace serve design](docs/design/bd-serve-per-workspace.md) have been run for the target environment.
+An opt-in read pilot uses Beads 1.3.0 or newer to start one authenticated `bd serve` child for each actively used SQL-server workspace. Set `bdServeReads` in `~/.beadbox/config.json` (beside `registry.json`):
+
+```json
+{
+  "bdServeReads": true
+}
+```
+
+The setting is read on each operation; absent or invalid values leave the pilot off. `BEADBOX_BD_SERVE_READS=1` or `=0` overrides the file when explicitly set. Each child listens only on an ephemeral loopback port and is stopped with the sidecar; embedded workspaces remain on the CLI. Keep the pilot disabled until the performance and parity checks in the [workspace serve design](docs/design/bd-serve-per-workspace.md) have been run for the target environment.
 
 ## Contributing
 

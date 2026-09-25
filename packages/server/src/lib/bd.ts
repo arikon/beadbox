@@ -4,6 +4,7 @@ import { readFile } from "fs/promises"
 import mysql from "mysql2/promise"
 import { basename, dirname, join } from "path"
 import { classifyBdError } from "./bd-error"
+import { bdServeReadsEnabled } from "./app-config"
 import { buildServerEnv, getWorkspacePassword } from "./credential-provider"
 import { ensureExternalScaffold } from "./external-scaffold"
 import { __resetBdPathCache, COMMON_BD_PATHS, resolveBdPath as getBdPath } from "./bd-paths"
@@ -230,8 +231,7 @@ async function readViaServe<T>(
   cli: (options: BdOptions) => Promise<T>,
 ): Promise<T> {
   const target = await targetFor(options)
-  if (!target || target.mode !== "server" || process.env.BEADBOX_BD_SERVE_READS !== "1")
-    return cli(options)
+  if (!target || target.mode !== "server" || !(await bdServeReadsEnabled())) return cli(options)
   return workspaceTransition.withOperation(target.id, async () => {
     await assertCurrentTarget(target)
     const scoped: ScopedOptions = { ...options, db: target.cliDbPath, __scoped: true }
