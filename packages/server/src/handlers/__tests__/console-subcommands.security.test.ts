@@ -28,6 +28,8 @@ mock.module("../../lib/exec", () => ({
 }))
 mock.module("../../lib/bd-paths", () => ({
   resolveBdPath: () => "/fake/bin/bd",
+  COMMON_BD_PATHS: [],
+  resetPathCaches: () => {},
   __resetBdPathCache: () => {},
 }))
 
