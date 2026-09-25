@@ -74,6 +74,33 @@ function isHealthReady(healthRef: React.RefObject<AppHealth>): boolean {
   return healthRef.current.status === "healthy"
 }
 
+function includeSystemForWorkspace(
+  workspace: Workspace | null,
+  savedModes: Record<string, boolean>,
+  sessionModes: Record<string, boolean>,
+): boolean {
+  if (!workspace) return false
+  return savedModes[workspace.id] ?? modeForWorkspace(workspace.id, sessionModes)
+}
+
+type TypeCatalog = {
+  workspaceId: string
+  status: "loading" | "retrying" | "ready" | "error"
+  message?: string
+}
+
+function typeCatalogState(catalog: TypeCatalog | null, workspaceId: string | undefined) {
+  const active = catalog?.workspaceId === workspaceId ? catalog : null
+  return {
+    ready: active?.status === "ready",
+    retrying: active?.status === "retrying",
+    error:
+      active && (active.status === "error" || active.status === "retrying")
+        ? (active.message ?? "Could not load issue types")
+        : null,
+  }
+}
+
 interface UseWorkspaceLifecycleOpts {
   initialWorkspaces: Workspace[]
   appHealth: AppHealth
@@ -97,10 +124,11 @@ export function useWorkspaceLifecycle(opts: UseWorkspaceLifecycleOpts) {
   const systemIssuesRef = useRef<Record<string, boolean>>({})
   const workspaceId = currentWorkspace?.id
   const workspaceDbPath = currentWorkspace?.databasePath
-  const includeSystem = currentWorkspace
-    ? (systemIssuesByWorkspace[currentWorkspace.id] ??
-      modeForWorkspace(currentWorkspace.id, systemIssuesRef.current))
-    : false
+  const includeSystem = includeSystemForWorkspace(
+    currentWorkspace,
+    systemIssuesByWorkspace,
+    systemIssuesRef.current,
+  )
   const setIncludeSystem = useCallback(
     (enabled: boolean) => {
       if (!workspaceId) return
@@ -121,25 +149,12 @@ export function useWorkspaceLifecycle(opts: UseWorkspaceLifecycleOpts) {
   )
   const [epics, setEpics] = useState<Epic[]>([])
   const [availableTypes, setAvailableTypes] = useState<string[]>([])
-  const [typeCatalog, setTypeCatalog] = useState<{
-    workspaceId: string
-    status: "loading" | "retrying" | "ready" | "error"
-    message?: string
-  } | null>(null)
-  const typeCatalogReady =
-    !!typeCatalog &&
-    typeCatalog.workspaceId === currentWorkspace?.id &&
-    typeCatalog.status === "ready"
-  const typeCatalogRetrying =
-    !!typeCatalog &&
-    typeCatalog.workspaceId === currentWorkspace?.id &&
-    typeCatalog.status === "retrying"
-  const typeCatalogError =
-    typeCatalog &&
-    typeCatalog.workspaceId === currentWorkspace?.id &&
-    (typeCatalog.status === "error" || typeCatalog.status === "retrying")
-      ? (typeCatalog.message ?? "Could not load issue types")
-      : null
+  const [typeCatalog, setTypeCatalog] = useState<TypeCatalog | null>(null)
+  const {
+    ready: typeCatalogReady,
+    retrying: typeCatalogRetrying,
+    error: typeCatalogError,
+  } = typeCatalogState(typeCatalog, currentWorkspace?.id)
   const typeCatalogRequestRef = useRef(0)
   const [isLoading, setIsLoading] = useState(true)
   const [isRefreshing, setIsRefreshing] = useState(false)

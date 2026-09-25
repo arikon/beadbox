@@ -1,16 +1,6 @@
 "use client"
 
-import {
-  ArrowDown,
-  ArrowUp,
-  CheckCircle2,
-  ExternalLink,
-  FileText,
-  Maximize2,
-  Pencil,
-  Rocket,
-  Trash2,
-} from "lucide-react"
+import { ArrowDown, ArrowUp, CheckCircle2, Maximize2, Pencil, Rocket, Trash2 } from "lucide-react"
 import posthog from "posthog-js"
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react"
 import { CommentsSection } from "@/components/bead-comments-section"
@@ -26,6 +16,7 @@ import {
 import { BeadExpandedViewModal } from "@/components/bead-expanded-view-modal"
 import { MetadataControls } from "@/components/bead-metadata-controls"
 import { SchedulingControls } from "@/components/bead-scheduling-controls"
+import { BeadSpecValue } from "@/components/bead-spec-value"
 import { CopyableId } from "@/components/copyable-id"
 import { EditableMarkdownField } from "@/components/editable-markdown-field"
 import { ExpandedCommentModal } from "@/components/expanded-comment-modal"
@@ -77,6 +68,20 @@ interface BeadDetailPanelProps {
 interface BeadDetailPanelHandle {
   navigateComments: (direction: "up" | "down") => void
   scrollToLatestComment: () => void
+}
+
+function isMoleculeViewEnabled(): boolean {
+  try {
+    const enabled = posthog.isFeatureEnabled("enable-molecule-view")
+    if (enabled !== undefined) return !!enabled
+  } catch {
+    /* PostHog not ready */
+  }
+  try {
+    return localStorage.getItem("beadbox_enable_molecule_view") === "true"
+  } catch {
+    return false
+  }
 }
 
 export const BeadDetailPanel = forwardRef<BeadDetailPanelHandle, BeadDetailPanelProps>(
@@ -139,21 +144,10 @@ export const BeadDetailPanel = forwardRef<BeadDetailPanelHandle, BeadDetailPanel
     const isMolecule = bead ? isMoleculePresentation(bead) : false
 
     useEffect(() => {
-      const check = () => {
-        try {
-          const ph = posthog.isFeatureEnabled("enable-molecule-view")
-          if (ph !== undefined) return !!ph
-        } catch {
-          /* PostHog not ready */
-        }
-        try {
-          return localStorage.getItem("beadbox_enable_molecule_view") === "true"
-        } catch {
-          return false
-        }
-      }
-      setMoleculeViewEnabled(check())
-      const cleanup = posthog.onFeatureFlags?.(() => setMoleculeViewEnabled(check()))
+      setMoleculeViewEnabled(isMoleculeViewEnabled())
+      const cleanup = posthog.onFeatureFlags?.(() =>
+        setMoleculeViewEnabled(isMoleculeViewEnabled()),
+      )
       return () => cleanup?.()
     }, [])
 
@@ -272,6 +266,289 @@ export const BeadDetailPanel = forwardRef<BeadDetailPanelHandle, BeadDetailPanel
           ? "Close"
           : null
 
+    const selectedBead = bead
+
+    function renderTitleRow() {
+      return (
+        <>
+          {/* Title row */}
+          <div className="flex items-start justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0 flex-1">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    className={cn(
+                      "px-2 py-1 text-xs font-medium rounded border capitalize cursor-pointer hover:opacity-80 transition-opacity shrink-0 flex items-center gap-1.5",
+                      typeColors[mutations.type] ??
+                        "bg-slate-500/20 text-slate-400 border-slate-500/30",
+                      mutations.fieldStates.type.hasError && "ring-2 ring-destructive",
+                      isMobile && "min-h-[44px] min-w-[44px]",
+                    )}
+                    disabled={mutations.fieldStates.type.isSaving || !typeCatalogReady}
+                  >
+                    {mutations.fieldStates.type.isSaving ? <Spinner className="h-3 w-3" /> : null}
+                    {mutations.type}
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start">
+                  {[...new Set([mutations.type, ...availableTypes])].map((t) => (
+                    <DropdownMenuItem
+                      key={t}
+                      onClick={() => mutations.handleTypeChange(t)}
+                      className="capitalize"
+                    >
+                      {t}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <h2 className="text-base font-semibold text-foreground/70 truncate">
+                {selectedBead.title}
+              </h2>
+            </div>
+            <div className="flex items-center gap-0.5 shrink-0">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => mutations.handleStatusChange("closed")}
+                    disabled={mutations.status === "closed"}
+                    className={cn("h-7 w-7", isMobile && "min-h-[44px] min-w-[44px]")}
+                  >
+                    <CheckCircle2 className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Close Bead</TooltipContent>
+              </Tooltip>
+              {onDelete && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => onDelete(selectedBead.id)}
+                      className={cn(
+                        "h-7 w-7 text-muted-foreground hover:text-destructive",
+                        isMobile && "min-h-[44px] min-w-[44px]",
+                      )}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Delete Bead</TooltipContent>
+                </Tooltip>
+              )}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => setIsExpandedView(true)}
+                    className={cn("h-7 w-7", isMobile && "min-h-[44px] min-w-[44px]")}
+                  >
+                    <Maximize2 className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Expand View</TooltipContent>
+              </Tooltip>
+            </div>
+          </div>
+        </>
+      )
+    }
+
+    function handleSpecIdKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+      if (e.key === "Enter") handleSpecIdSave()
+      if (e.key === "Escape") {
+        setIsEditingSpecId(false)
+        setEditSpecIdValue("")
+      }
+    }
+
+    function renderSpecRow() {
+      return (
+        <>
+          {/* Spec ID row */}
+          <div className="flex items-center gap-2 mt-1.5 text-sm text-muted-foreground">
+            <BeadSpecValue
+              specId={mutations.specId}
+              isEditing={isEditingSpecId}
+              editValue={editSpecIdValue}
+              isMobile={isMobile}
+              onEditValueChange={setEditSpecIdValue}
+              onKeyDown={handleSpecIdKeyDown}
+              onSave={handleSpecIdSave}
+              onEdit={handleSpecIdEdit}
+              onView={handleSpecIdView}
+            />
+            {mutations.fieldStates.specId.isSaving && <Spinner className="h-3 w-3" />}
+            {mutations.specId && !isEditingSpecId && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={handleSpecIdEdit}
+                    className="text-muted-foreground/40 hover:text-muted-foreground transition-colors"
+                  >
+                    <span className="text-xs">edit</span>
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent>Edit spec ID</TooltipContent>
+              </Tooltip>
+            )}
+          </div>
+        </>
+      )
+    }
+
+    const hasDesign = Boolean(mutations.design || isEditingDesign)
+    const showAddDesign = !mutations.design && !isEditingDesign
+
+    function renderDesign() {
+      return (
+        <>
+          {/* Design */}
+          {hasDesign && (
+            <div className="pt-4 border-t border-border/30">
+              <div className="flex items-center gap-2 mb-2">
+                <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  Design
+                </h3>
+                {!isEditingDesign && (
+                  <button
+                    aria-label="Edit Design"
+                    onClick={() => {
+                      setEditDesignValue(mutations.design)
+                      setIsEditingDesign(true)
+                    }}
+                    className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    <Pencil className="h-3 w-3" />
+                    <span>Edit</span>
+                  </button>
+                )}
+                {mutations.fieldStates.design.isSaving && <Spinner className="h-3 w-3" />}
+              </div>
+              {isEditingDesign ? (
+                <div>
+                  <Textarea
+                    value={editDesignValue}
+                    onChange={(e) => setEditDesignValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                        e.preventDefault()
+                        handleDesignSave()
+                      }
+                      if (e.key === "Escape") {
+                        setIsEditingDesign(false)
+                        setEditDesignValue("")
+                      }
+                    }}
+                    placeholder="Design notes (markdown)..."
+                    rows={8}
+                    autoFocus
+                    className="w-full bg-transparent border-border/40 text-foreground text-sm resize-y"
+                  />
+                  <div className="flex items-center gap-2 mt-1.5">
+                    <Button size="sm" className="h-6 text-xs" onClick={handleDesignSave}>
+                      Save
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-6 text-xs"
+                      onClick={() => {
+                        setIsEditingDesign(false)
+                        setEditDesignValue("")
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                    <span className="text-xs text-muted-foreground/40">Cmd+Enter to save</span>
+                  </div>
+                </div>
+              ) : (
+                <div className="prose prose-sm prose-invert max-w-none text-foreground/90">
+                  <SimpleMarkdown content={mutations.design} />
+                </div>
+              )}
+            </div>
+          )}
+          {showAddDesign && (
+            <div className="pt-4 border-t border-border/30">
+              <button
+                onClick={() => {
+                  setEditDesignValue("")
+                  setIsEditingDesign(true)
+                }}
+                className={cn(
+                  "inline-flex items-center gap-1 text-xs text-muted-foreground/50 hover:text-muted-foreground transition-colors",
+                  isMobile && "min-h-[44px]",
+                )}
+              >
+                <Pencil className="h-3 w-3" />
+                <span>Add design</span>
+              </button>
+            </div>
+          )}
+        </>
+      )
+    }
+
+    function renderFields() {
+      return (
+        <>
+          {/* Description */}
+          <div ref={descriptionRef}>
+            <EditableMarkdownField
+              key={`${selectedBead.id}:description`}
+              label="Description"
+              value={mutations.description}
+              isSaving={mutations.fieldStates.description.isSaving}
+              onSave={(value) => mutations.saveTextField("description", value)}
+            />
+          </div>
+
+          {renderDesign()}
+
+          {/* Acceptance Criteria */}
+          <EditableMarkdownField
+            key={`${selectedBead.id}:acceptanceCriteria`}
+            label="Acceptance Criteria"
+            value={mutations.acceptanceCriteria}
+            isSaving={mutations.fieldStates.acceptanceCriteria.isSaving}
+            onSave={(value) => mutations.saveTextField("acceptanceCriteria", value)}
+          />
+
+          {/* Notes */}
+          <EditableMarkdownField
+            key={`${selectedBead.id}:notes`}
+            label="Notes"
+            value={mutations.notes}
+            isSaving={mutations.fieldStates.notes.isSaving}
+            onSave={(value) => mutations.saveTextField("notes", value)}
+          />
+
+          {/* Custom Fields */}
+          {Object.keys(selectedBead.metadata || {}).length > 0 && (
+            <div className="pt-4 border-t border-border/30">
+              <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
+                Custom Fields
+              </h3>
+              <div className="space-y-1">
+                {Object.entries(selectedBead.metadata!).map(([key, value]) => (
+                  <div key={key} className="flex items-center justify-between text-sm">
+                    <span className="text-muted-foreground">{key}</span>
+                    <span className="text-foreground/90">{value}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      )
+    }
+
     return (
       <div
         className="h-full flex flex-col relative outline-none"
@@ -282,89 +559,7 @@ export const BeadDetailPanel = forwardRef<BeadDetailPanelHandle, BeadDetailPanel
         {/* Header */}
         <div className="-mx-4 px-4 md:px-6 pt-3 md:pt-4 pb-3 md:pb-4 bg-card border-b border-border shrink-0">
           <TooltipProvider>
-            {/* Title row */}
-            <div className="flex items-start justify-between gap-2">
-              <div className="flex items-center gap-2 min-w-0 flex-1">
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <button
-                      className={cn(
-                        "px-2 py-1 text-xs font-medium rounded border capitalize cursor-pointer hover:opacity-80 transition-opacity shrink-0 flex items-center gap-1.5",
-                        typeColors[mutations.type] ??
-                          "bg-slate-500/20 text-slate-400 border-slate-500/30",
-                        mutations.fieldStates.type.hasError && "ring-2 ring-destructive",
-                        isMobile && "min-h-[44px] min-w-[44px]",
-                      )}
-                      disabled={mutations.fieldStates.type.isSaving || !typeCatalogReady}
-                    >
-                      {mutations.fieldStates.type.isSaving ? <Spinner className="h-3 w-3" /> : null}
-                      {mutations.type}
-                    </button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start">
-                    {[...new Set([mutations.type, ...availableTypes])].map((t) => (
-                      <DropdownMenuItem
-                        key={t}
-                        onClick={() => mutations.handleTypeChange(t)}
-                        className="capitalize"
-                      >
-                        {t}
-                      </DropdownMenuItem>
-                    ))}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-                <h2 className="text-base font-semibold text-foreground/70 truncate">
-                  {bead.title}
-                </h2>
-              </div>
-              <div className="flex items-center gap-0.5 shrink-0">
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => mutations.handleStatusChange("closed")}
-                      disabled={mutations.status === "closed"}
-                      className={cn("h-7 w-7", isMobile && "min-h-[44px] min-w-[44px]")}
-                    >
-                      <CheckCircle2 className="h-4 w-4" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>Close Bead</TooltipContent>
-                </Tooltip>
-                {onDelete && (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => onDelete(bead.id)}
-                        className={cn(
-                          "h-7 w-7 text-muted-foreground hover:text-destructive",
-                          isMobile && "min-h-[44px] min-w-[44px]",
-                        )}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>Delete Bead</TooltipContent>
-                  </Tooltip>
-                )}
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => setIsExpandedView(true)}
-                      className={cn("h-7 w-7", isMobile && "min-h-[44px] min-w-[44px]")}
-                    >
-                      <Maximize2 className="h-4 w-4" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>Expand View</TooltipContent>
-                </Tooltip>
-              </div>
-            </div>
+            {renderTitleRow()}
 
             {/* ID, External Ref, Timestamps */}
             <div className="flex items-center gap-3 text-sm text-muted-foreground mt-2 flex-wrap">
@@ -390,89 +585,7 @@ export const BeadDetailPanel = forwardRef<BeadDetailPanelHandle, BeadDetailPanel
               )}
             </div>
 
-            {/* Spec ID row */}
-            <div className="flex items-center gap-2 mt-1.5 text-sm text-muted-foreground">
-              {isEditingSpecId ? (
-                <div className="flex items-center gap-1">
-                  <FileText className="h-3.5 w-3.5 shrink-0" />
-                  <input
-                    value={editSpecIdValue}
-                    onChange={(e) => setEditSpecIdValue(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") handleSpecIdSave()
-                      if (e.key === "Escape") {
-                        setIsEditingSpecId(false)
-                        setEditSpecIdValue("")
-                      }
-                    }}
-                    onBlur={handleSpecIdSave}
-                    placeholder="spec path or URL..."
-                    autoFocus
-                    className="w-full md:w-48 bg-transparent border-b border-border text-foreground text-sm outline-none"
-                  />
-                </div>
-              ) : mutations.specId ? (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    {mutations.specId.startsWith("http") ? (
-                      <a
-                        href={mutations.specId}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={(e) => e.stopPropagation()}
-                        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-400 font-medium hover:bg-indigo-500/30 transition-colors"
-                      >
-                        <ExternalLink className="h-3 w-3" />
-                        <span className="truncate max-w-[200px]">{mutations.specId}</span>
-                      </a>
-                    ) : (
-                      <button
-                        onClick={handleSpecIdView}
-                        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-400 font-medium hover:bg-indigo-500/30 transition-colors cursor-pointer"
-                      >
-                        <FileText className="h-3 w-3" />
-                        <span className="truncate max-w-[200px]">{mutations.specId}</span>
-                      </button>
-                    )}
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    {mutations.specId.startsWith("http")
-                      ? "Open spec (click to edit: double-click)"
-                      : "Click to view spec"}
-                  </TooltipContent>
-                </Tooltip>
-              ) : (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      onClick={handleSpecIdEdit}
-                      className={cn(
-                        "inline-flex items-center gap-1 text-xs text-muted-foreground/50 hover:text-muted-foreground transition-colors",
-                        isMobile && "min-h-[44px]",
-                      )}
-                    >
-                      <FileText className="h-3 w-3" />
-                      <span>Add spec</span>
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent>Link a specification document</TooltipContent>
-                </Tooltip>
-              )}
-              {mutations.fieldStates.specId.isSaving && <Spinner className="h-3 w-3" />}
-              {mutations.specId && !isEditingSpecId && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      onClick={handleSpecIdEdit}
-                      className="text-muted-foreground/40 hover:text-muted-foreground transition-colors"
-                    >
-                      <span className="text-xs">edit</span>
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent>Edit spec ID</TooltipContent>
-                </Tooltip>
-              )}
-            </div>
+            {renderSpecRow()}
 
             <SchedulingControls
               dueAt={mutations.dueAt}
@@ -556,138 +669,7 @@ export const BeadDetailPanel = forwardRef<BeadDetailPanelHandle, BeadDetailPanel
             <TooltipProvider>
               <div className="py-4 flex gap-3">
                 <div className="flex-1 min-w-0 space-y-4">
-                  {/* Description */}
-                  <div ref={descriptionRef}>
-                    <EditableMarkdownField
-                      key={`${bead.id}:description`}
-                      label="Description"
-                      value={mutations.description}
-                      isSaving={mutations.fieldStates.description.isSaving}
-                      onSave={(value) => mutations.saveTextField("description", value)}
-                    />
-                  </div>
-
-                  {/* Design */}
-                  {(mutations.design || isEditingDesign) && (
-                    <div className="pt-4 border-t border-border/30">
-                      <div className="flex items-center gap-2 mb-2">
-                        <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                          Design
-                        </h3>
-                        {!isEditingDesign && (
-                          <button
-                            aria-label="Edit Design"
-                            onClick={() => {
-                              setEditDesignValue(mutations.design)
-                              setIsEditingDesign(true)
-                            }}
-                            className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-                          >
-                            <Pencil className="h-3 w-3" />
-                            <span>Edit</span>
-                          </button>
-                        )}
-                        {mutations.fieldStates.design.isSaving && <Spinner className="h-3 w-3" />}
-                      </div>
-                      {isEditingDesign ? (
-                        <div>
-                          <Textarea
-                            value={editDesignValue}
-                            onChange={(e) => setEditDesignValue(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                                e.preventDefault()
-                                handleDesignSave()
-                              }
-                              if (e.key === "Escape") {
-                                setIsEditingDesign(false)
-                                setEditDesignValue("")
-                              }
-                            }}
-                            placeholder="Design notes (markdown)..."
-                            rows={8}
-                            autoFocus
-                            className="w-full bg-transparent border-border/40 text-foreground text-sm resize-y"
-                          />
-                          <div className="flex items-center gap-2 mt-1.5">
-                            <Button size="sm" className="h-6 text-xs" onClick={handleDesignSave}>
-                              Save
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              className="h-6 text-xs"
-                              onClick={() => {
-                                setIsEditingDesign(false)
-                                setEditDesignValue("")
-                              }}
-                            >
-                              Cancel
-                            </Button>
-                            <span className="text-xs text-muted-foreground/40">
-                              Cmd+Enter to save
-                            </span>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="prose prose-sm prose-invert max-w-none text-foreground/90">
-                          <SimpleMarkdown content={mutations.design} />
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  {!mutations.design && !isEditingDesign && (
-                    <div className="pt-4 border-t border-border/30">
-                      <button
-                        onClick={() => {
-                          setEditDesignValue("")
-                          setIsEditingDesign(true)
-                        }}
-                        className={cn(
-                          "inline-flex items-center gap-1 text-xs text-muted-foreground/50 hover:text-muted-foreground transition-colors",
-                          isMobile && "min-h-[44px]",
-                        )}
-                      >
-                        <Pencil className="h-3 w-3" />
-                        <span>Add design</span>
-                      </button>
-                    </div>
-                  )}
-
-                  {/* Acceptance Criteria */}
-                  <EditableMarkdownField
-                    key={`${bead.id}:acceptanceCriteria`}
-                    label="Acceptance Criteria"
-                    value={mutations.acceptanceCriteria}
-                    isSaving={mutations.fieldStates.acceptanceCriteria.isSaving}
-                    onSave={(value) => mutations.saveTextField("acceptanceCriteria", value)}
-                  />
-
-                  {/* Notes */}
-                  <EditableMarkdownField
-                    key={`${bead.id}:notes`}
-                    label="Notes"
-                    value={mutations.notes}
-                    isSaving={mutations.fieldStates.notes.isSaving}
-                    onSave={(value) => mutations.saveTextField("notes", value)}
-                  />
-
-                  {/* Custom Fields */}
-                  {Object.keys(bead.metadata || {}).length > 0 && (
-                    <div className="pt-4 border-t border-border/30">
-                      <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
-                        Custom Fields
-                      </h3>
-                      <div className="space-y-1">
-                        {Object.entries(bead.metadata!).map(([key, value]) => (
-                          <div key={key} className="flex items-center justify-between text-sm">
-                            <span className="text-muted-foreground">{key}</span>
-                            <span className="text-foreground/90">{value}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
+                  {renderFields()}
 
                   <BeadDependenciesDisplay
                     blockedBy={bead.blockedBy}

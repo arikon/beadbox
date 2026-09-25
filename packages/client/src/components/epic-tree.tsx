@@ -1145,6 +1145,33 @@ interface EpicRowProps {
   onToggleSelectAll?: (visibleIds: string[]) => void
 }
 
+function getEpicRowState(
+  epic: Epic,
+  depth: number,
+  isMobile: boolean,
+  isArchived: boolean,
+  isBacklog: boolean,
+) {
+  const hasChildEpics = epic.childEpics && epic.childEpics.length > 0
+  const hasChildBeads = (epic.children?.length ?? 0) > 0
+  const hasContent = hasChildEpics || hasChildBeads
+  const isStandalone = epic.id === "_standalone"
+  return {
+    hasChildEpics,
+    hasChildBeads,
+    hasContent,
+    isEmpty: !hasContent,
+    depthMargin: isMobile ? Math.min(depth, 2) * 6 : depth * 12,
+    isStandalone,
+    rowArchived: isArchived || Boolean(epic.labels?.includes("archived")),
+    rowBacklogged: isBacklog || epic.priority === "backlog",
+    borderColor: isStandalone
+      ? ""
+      : depthBorderColors[Math.min(depth, depthBorderColors.length - 1)],
+    isDraggable: !isStandalone,
+  }
+}
+
 function EpicRow({
   epic,
   depth,
@@ -1179,27 +1206,18 @@ function EpicRow({
   const isExpanded = expandedEpics.has(epic.id)
   const { closed: closedCount, total: totalCount } = getAggregatedCounts(epic)
   const progress = totalCount > 0 ? (closedCount / totalCount) * 100 : 0
-
-  const hasChildEpics = epic.childEpics && epic.childEpics.length > 0
-  const hasChildBeads = (epic.children?.length ?? 0) > 0
-  const hasContent = hasChildEpics || hasChildBeads
-  const isEmpty = !hasContent
-
-  // Calculate left margin based on depth (for nested epics)
-  // Mobile: 6px per level, capped at 2 levels (max 12px) to save space
-  const depthMargin = isMobile ? Math.min(depth, 2) * 6 : depth * 12
-  const isStandalone = epic.id === "_standalone"
-  const rowArchived = isArchived || Boolean(epic.labels?.includes("archived"))
-  const rowBacklogged = isBacklog || epic.priority === "backlog"
-  const borderColor = isStandalone
-    ? ""
-    : depthBorderColors[Math.min(depth, depthBorderColors.length - 1)]
-
-  // All epics are draggable (except the special _standalone pseudo-epic)
-  // - Nested epics can be moved to other parents
-  // - Top-level epics can be archived
-  // - Archived epics can be unarchived
-  const isDraggable = !isStandalone
+  const {
+    hasChildEpics,
+    hasChildBeads,
+    hasContent,
+    isEmpty,
+    depthMargin,
+    isStandalone,
+    rowArchived,
+    rowBacklogged,
+    borderColor,
+    isDraggable,
+  } = getEpicRowState(epic, depth, isMobile, isArchived, isBacklog)
 
   // Render standalone beads with a minimal header instead of a full card
   if (isStandalone) {
