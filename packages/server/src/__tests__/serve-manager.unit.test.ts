@@ -87,8 +87,10 @@ process.on("SIGTERM", () => { appendFileSync(process.env.BEADBOX_SERVE_TEST_MARK
   const target = await resolveWorkspaceTarget("a")
   const manager = new ServeManager()
   try {
+    expect(manager.hasReadySession(target)).toBe(false)
     const [a, b] = await Promise.all([manager.getSession(target), manager.getSession(target)])
     expect(a).toBe(b)
+    expect(manager.hasReadySession(target)).toBe(true)
     expect(await a.listIssues({ all: true, limit: 0 })).toEqual([])
     const starts = (await readFile(marker, "utf8")).trim().split("\n")
     expect(starts).toHaveLength(1)

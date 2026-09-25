@@ -34,7 +34,7 @@ describe("ServeHttpSession", () => {
     const session = await ServeHttpSession.connect(handle({
       "/v0/beads/context": context(),
       "/v0/beads/ready?limit=1": { items: [] },
-      "/v0/beads/issues?sort=created&all=true&limit=0": { items: [{ id: "a" }], has_more: false },
+      "/v0/beads/issues?sort=priority&all=true&limit=0": { items: [{ id: "a" }], has_more: false },
       "/v0/beads/issues/a?include_comments=true&include_dependents=true&brief_deps=true": { id: "a", comments: [{ text: "ok" }] },
     }, calls))
     expect(session.hasCapability("issues.list")).toBe(true)
@@ -63,10 +63,78 @@ describe("ServeHttpSession", () => {
     const calls: Array<[string, RequestInit | undefined]> = []
     const session = await ServeHttpSession.connect(handle({
       "/v0/beads/context": context(), "/v0/beads/ready?limit=1": {},
-      "/v0/beads/issues?sort=created&all=true&limit=1": { items: [{ id: "a" }], has_more: true, next_cursor: "opaque" },
-      "/v0/beads/issues?sort=created&all=true&limit=1&cursor=opaque": { items: [{ id: "b" }], has_more: false },
+      "/v0/beads/issues?sort=priority&all=true&limit=1": { items: [{ id: "a" }], has_more: true, next_cursor: "opaque" },
+      "/v0/beads/issues?sort=priority&all=true&limit=1&cursor=opaque": { items: [{ id: "b" }], has_more: false },
     }, calls))
     expect(await session.listIssues({ all: true, limit: 1 })).toEqual([{ id: "a" }, { id: "b" }])
+  })
+
+  test("system list forwards all three category flags in priority order", async () => {
+    const calls: Array<[string, RequestInit | undefined]> = []
+    const path = "/v0/beads/issues?sort=priority&all=true&limit=0&include_gates=true&include_infra=true&include_templates=true"
+    const session = await ServeHttpSession.connect(handle({
+      "/v0/beads/context": context(), "/v0/beads/ready?limit=1": {},
+      [path]: { items: [{ id: "a" }], has_more: false },
+    }, calls))
+    expect(await session.listIssues({
+      all: true, limit: 0, include_gates: true, include_infra: true, include_templates: true,
+    })).toEqual([{ id: "a" }])
+    expect(calls.at(-1)?.[0]).toBe(path)
+  })
+
+  test("full detail carries both dependency directions and comments in one read", async () => {
+    const calls: Array<[string, RequestInit | undefined]> = []
+    const path = "/v0/beads/issues/a?include_comments=true&include_dependents=true&brief_deps=true"
+    const detail = {
+      id: "a", title: "Issue", status: "open", issue_type: "task", priority: 2,
+      comment_count: 1, dependent_count: 1, comments_omitted: false,
+      comments: [{ id: "c", author: "a", text: "hello", created_at: "2026-09-25T00:00:00Z" }],
+      dependencies: [{ id: "b", title: "Blocker", status: "open", dependency_type: "blocks" }],
+      dependents: [{ id: "c", title: "Blocked", status: "open", dependency_type: "blocks" }],
+    }
+    const session = await ServeHttpSession.connect(handle({
+      "/v0/beads/context": context(), "/v0/beads/ready?limit=1": {}, [path]: detail,
+    }, calls))
+    expect(await session.getFullIssue("a")).toEqual(detail)
+    expect(calls.map(([called]) => called)).toEqual(["/v0/beads/context", "/v0/beads/ready?limit=1", path])
+  })
+
+  test("full detail rejects omitted or malformed requested data", async () => {
+    const path = "/v0/beads/issues/a?include_comments=true&include_dependents=true&brief_deps=true"
+    for (const invalid of [
+      { comments_omitted: true },
+      { comment_count: 1, comments: null },
+      { dependent_count: 1, dependents: null },
+      { dependency_count: 1 },
+      { dependencies: [{ id: "b", title: "Blocker", status: "open" }] },
+    ]) {
+      const session = await ServeHttpSession.connect(handle({
+        "/v0/beads/context": context(), "/v0/beads/ready?limit=1": {},
+        [path]: { id: "a", title: "Issue", status: "open", issue_type: "task", priority: 2, ...invalid },
+      }, []))
+      await expect(session.getFullIssue("a")).rejects.toMatchObject({ kind: "contract" })
+    }
+  })
+
+  test("config get distinguishes absent value from redaction", async () => {
+    const calls: Array<[string, RequestInit | undefined]> = []
+    const key = "/v0/beads/config/status.custom"
+    const session = await ServeHttpSession.connect(handle({
+      "/v0/beads/context": context({ capabilities: ["project.enforce", "config.get"] }),
+      "/v0/beads/ready?limit=1": {}, [key]: { key: "status.custom", redacted: false },
+    }, calls))
+    expect(await session.getSetting("status.custom")).toBeNull()
+    expect(calls.at(-1)?.[0]).toBe(key)
+    const explicitNull = await ServeHttpSession.connect(handle({
+      "/v0/beads/context": context({ capabilities: ["config.get"] }),
+      "/v0/beads/ready?limit=1": {}, [key]: { key: "status.custom", value: null, redacted: false },
+    }, []))
+    expect(await explicitNull.getSetting("status.custom")).toBeNull()
+    const redacted = await ServeHttpSession.connect(handle({
+      "/v0/beads/context": context({ capabilities: ["config.get"] }),
+      "/v0/beads/ready?limit=1": {}, [key]: { key: "status.custom", redacted: true },
+    }, []))
+    await expect(redacted.getSetting("status.custom")).rejects.toMatchObject({ kind: "contract" })
   })
 })
 

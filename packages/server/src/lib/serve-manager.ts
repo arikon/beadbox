@@ -128,6 +128,24 @@ export class ServeManager {
   private closed = false
   private idleTimer: ReturnType<typeof setInterval> | null = null
 
+  hasReadySession(target: WorkspaceTarget): boolean {
+    const owned = this.processes.get(target.id)
+    return !!(
+      owned?.session &&
+      owned.target.generation === target.generation &&
+      !owned.draining &&
+      owned.child.exitCode === null
+    )
+  }
+
+  prewarm(target: WorkspaceTarget): void {
+    void this.getSession(target).catch((error) => {
+      const reason = error instanceof ServeHttpError ? error.kind : "unknown"
+      const code = error instanceof ServeHttpError ? (error.code ?? "none") : "none"
+      console.warn(`[bd-serve] prewarm failed workspace=${target.id} reason=${reason} code=${code}`)
+    })
+  }
+
   async getSession(target: WorkspaceTarget): Promise<ServeHttpSession> {
     return workspaceTransition.withOperation(target.id, async () => {
       await this.assertCurrentTarget(target)

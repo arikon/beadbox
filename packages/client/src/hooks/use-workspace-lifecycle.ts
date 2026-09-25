@@ -833,7 +833,9 @@ export function useWorkspaceLifecycle(opts: UseWorkspaceLifecycleOpts) {
         .then((statuses) => {
           if (active) setAvailableStatuses(statuses)
         })
-        .catch(() => {}) // loadEpics reports the transport error for this workspace.
+        .catch(() => {
+          if (active) toast.error("Could not load workspace statuses", { id: "workspace-status-error" })
+        })
       // beadbox-3qo: also fetch the ordered status.custom chain for the
       // workflow advancement button (pm/spec §4.3). Empty array = button hidden.
       rpc.beads
@@ -841,7 +843,9 @@ export function useWorkspaceLifecycle(opts: UseWorkspaceLifecycleOpts) {
         .then((chain) => {
           if (active) setCustomStatusChain(chain)
         })
-        .catch(() => {}) // The main load supplies the visible error state.
+        .catch(() => {
+          if (active) toast.error("Could not load workspace statuses", { id: "workspace-status-error" })
+        })
       void fetchAvailableTypes(currentWorkspace)
       // Expose db path for console commands
       const beadbox = ensureBeadboxStamp()

@@ -132,9 +132,10 @@ export class ServeHttpSession {
     if (!this.hasCapability("issues.list"))
       throw new ServeHttpError("contract", "bd serve lacks issues.list")
     const params = new URLSearchParams()
-    params.set("sort", "created")
+    // `bd list` without --sort uses priority order in Beads 1.3.0.
+    params.set("sort", typeof query.sort === "string" ? query.sort : "priority")
     for (const [key, value] of Object.entries(query)) {
-      if (value === undefined) continue
+      if (value === undefined || key === "sort") continue
       for (const part of Array.isArray(value) ? value : [value]) params.append(key, String(part))
     }
     const items: Issue[] = []
@@ -175,12 +176,96 @@ export class ServeHttpSession {
     return detail as IssueDetails
   }
 
+  async getFullIssue(id: string): Promise<IssueDetails> {
+    const detail = await this.getIssue(id, {
+      includeComments: true,
+      includeDependents: true,
+      briefDeps: true,
+    })
+    for (const field of ["comments", "dependencies", "dependents"] as const) {
+      const value = detail[field]
+      if (value !== undefined && value !== null && !Array.isArray(value))
+        throw new ServeHttpError("contract", `Invalid bd serve ${field}`)
+    }
+    if (
+      typeof detail.title !== "string" ||
+      typeof detail.status !== "string" ||
+      typeof detail.issue_type !== "string" ||
+      typeof detail.priority !== "number"
+    )
+      throw new ServeHttpError("contract", "Invalid bd serve issue fields")
+    if (
+      !((detail.comments ?? []) as unknown[]).every(
+        (comment) =>
+          object(comment) &&
+          typeof comment.id === "string" &&
+          typeof comment.author === "string" &&
+          typeof comment.text === "string" &&
+          typeof comment.created_at === "string",
+      )
+    )
+      throw new ServeHttpError("contract", "Invalid bd serve comments")
+    for (const field of ["dependencies", "dependents"] as const) {
+      if (
+        !((detail[field] ?? []) as unknown[]).every(
+          (neighbor) =>
+            object(neighbor) &&
+            typeof neighbor.id === "string" &&
+            typeof neighbor.title === "string" &&
+            typeof neighbor.status === "string" &&
+            typeof neighbor.dependency_type === "string",
+        )
+      )
+        throw new ServeHttpError("contract", `Invalid bd serve ${field}`)
+    }
+    if (detail.comments_omitted === true)
+      throw new ServeHttpError("contract", "bd serve omitted requested comments")
+    if (
+      typeof detail.comment_count === "number" &&
+      detail.comment_count > 0 &&
+      !Array.isArray(detail.comments)
+    )
+      throw new ServeHttpError("contract", "bd serve omitted requested comments")
+    if (
+      typeof detail.dependent_count === "number" &&
+      detail.dependent_count > 0 &&
+      !Array.isArray(detail.dependents)
+    )
+      throw new ServeHttpError("contract", "bd serve omitted requested dependents")
+    // An explicit null can represent an empty hydrated neighbor list even
+    // when dangling external edges contribute to dependency_count. Omission
+    // with a positive count is a truncated response instead.
+    if (
+      typeof detail.dependency_count === "number" &&
+      detail.dependency_count > 0 &&
+      detail.dependencies === undefined
+    )
+      throw new ServeHttpError("contract", "bd serve omitted dependencies")
+    return detail
+  }
+
   async getComments(id: string): Promise<JsonObject[]> {
     const detail = await this.getIssue(id, { includeComments: true })
     if (detail.comments === undefined || detail.comments === null) return []
     if (!Array.isArray(detail.comments))
       throw new ServeHttpError("contract", "Invalid bd serve comments")
     return detail.comments
+  }
+
+  async getSetting(key: string): Promise<string | null> {
+    if (!this.hasCapability("config.get"))
+      throw new ServeHttpError("contract", "bd serve lacks config.get")
+    const setting = await this.request<unknown>(`/v0/beads/config/${encodeURIComponent(key)}`)
+    if (
+      !object(setting) ||
+      setting.key !== key ||
+      typeof setting.redacted !== "boolean" ||
+      (setting.value !== undefined && setting.value !== null && typeof setting.value !== "string")
+    )
+      throw new ServeHttpError("contract", "Invalid bd serve setting")
+    if (setting.redacted)
+      throw new ServeHttpError("contract", "bd serve redacted requested setting")
+    return (setting.value as string | null | undefined) ?? null
   }
 }
 

@@ -67,12 +67,8 @@ export async function getAvailableStatuses(dbPath?: string): Promise<string[]> {
   }
   const coreStatuses = ["open", "in_progress", "closed"]
 
-  try {
-    const customStatuses = await bdGetCustomStatuses(options)
-    return [...coreStatuses, ...customStatuses]
-  } catch {
-    return coreStatuses
-  }
+  const customStatuses = await bdGetCustomStatuses(options)
+  return [...coreStatuses, ...customStatuses]
 }
 
 // `bd types` reflects the selected workspace's types.custom configuration.
@@ -100,11 +96,7 @@ export async function getAvailableTypes(dbPath?: string): Promise<string[]> {
 // Ported from v0.24 actions/beads.ts (commit 1386b41 / bb-oqux) for bb-wxuw.
 export async function getCustomStatusList(dbPath?: string): Promise<string[]> {
   const { options } = await workspaceTargetOptions(dbPath)
-  try {
-    return await bdGetCustomStatuses(options)
-  } catch {
-    return []
-  }
+  return bdGetCustomStatuses(options)
 }
 
 // Replace the custom-status list. Validates each entry server-side as a

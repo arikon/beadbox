@@ -17,15 +17,14 @@ import {
   getComments,
   getDataFingerprint,
   listBeads,
-  listDependencies,
-  listDependents,
   mapPriority,
   mapType,
-  showBead,
+  readBeadDetail,
 } from "../lib/bd"
 import type { BdLoadError } from "../lib/bd-error"
 import { toBdLoadError } from "../lib/bd-error"
 import { readMetadataMode } from "../lib/dolt-metadata"
+import { ServeHttpError } from "../lib/serve-http"
 import {
   getBeadDetailCacheStats,
   getCachedBeadDetail,
@@ -513,20 +512,8 @@ async function getBeadDetailCore(
       readOptions = { ...options, parallel: true }
     }
 
-    // beadbox-a9l: comment bodies come from the dedicated, version-stable
-    // `bd comments <id> --json` subcommand (getComments) rather than from
-    // bd show — bd show omits bodies by default and its --include-comments
-    // flag is version-gated (fails on CI's older bd). getComments runs in
-    // the SAME parallel batch as showBead, so there is no added round-trip
-    // vs. reading them inline; both are cheaper than the pre-b09d6ccc
-    // design's serial getComments call. Falls back to an empty list so a
-    // comments fetch failure never blocks the rest of the detail panel.
-    const [bdBead, bdComments, deps, dependents] = await Promise.all([
-      showBead(id, readOptions),
-      getComments(id, readOptions).catch(() => []),
-      listDependencies(id, readOptions).catch(() => []),
-      listDependents(id, readOptions).catch(() => []),
-    ])
+    const { bead: bdBead, comments: bdComments, dependencies: deps, dependents } =
+      await readBeadDetail(id, readOptions)
 
     const comments = bdComments.map(convertComment)
     const bead = convertBead(bdBead, comments)
@@ -547,8 +534,11 @@ async function getBeadDetailCore(
     setCachedBeadDetail(result)
 
     return result
-  } catch {
-    return null
+  } catch (error) {
+    if (error instanceof ServeHttpError && error.status === 404 && error.code === "not_found")
+      return null
+    if (error instanceof Error && error.message === `Issue not found: ${id}`) return null
+    throw error
   }
 }
 

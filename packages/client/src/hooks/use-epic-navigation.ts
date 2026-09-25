@@ -4,6 +4,7 @@ import type { Filters } from "@/components/filter-bar"
 import { dispatchKeyDown, type KeyNavContext } from "@/lib/epic-navigation-keys"
 import { useHasTrains } from "@/hooks/use-has-trains"
 import { countAllBeads, findBeadById, findParentPath } from "@/lib/epic-tree-utils"
+import { toastError } from "@/lib/notifications"
 import { safeCapture } from "@/lib/posthog-safe"
 import {
   getAnalyticsEnabled,
@@ -178,16 +179,18 @@ export function useEpicNavigation(opts: UseEpicNavigationOpts) {
         return
       }
       // Data may have changed (new comments, etc.) - refetch
-      getBeadDetail(beadIdParam, currentWorkspace?.id).then((fullBead) => {
-        if (!fullBead) return
-        setSelectedBead((prev) => {
-          if (!prev || prev.id !== beadIdParam) return prev
-          if (fullBead.comments.length > prev.comments.length) {
-            setTimeout(() => detailPanelRef.current?.scrollToLatestComment(), 50)
-          }
-          return { ...prev, ...fullBead }
+      getBeadDetail(beadIdParam, currentWorkspace?.id)
+        .then((fullBead) => {
+          if (!fullBead) return
+          setSelectedBead((prev) => {
+            if (!prev || prev.id !== beadIdParam) return prev
+            if (fullBead.comments.length > prev.comments.length) {
+              setTimeout(() => detailPanelRef.current?.scrollToLatestComment(), 50)
+            }
+            return { ...prev, ...fullBead }
+          })
         })
-      })
+        .catch(() => toastError("Failed to load issue details"))
       return
     }
 
@@ -210,6 +213,7 @@ export function useEpicNavigation(opts: UseEpicNavigationOpts) {
           }
         }
       })
+      .catch(() => toastError("Failed to load issue details"))
       .finally(() => {
         setIsLoadingBead(false)
       })

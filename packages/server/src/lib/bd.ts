@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "fs"
 import { readFile } from "fs/promises"
 import mysql from "mysql2/promise"
 import { basename, dirname, join } from "path"
-import { classifyBdError } from "./bd-error"
+import { BdError, classifyBdError } from "./bd-error"
 import { bdServeReadsEnabled } from "./app-config"
 import { buildServerEnv, getWorkspacePassword } from "./credential-provider"
 import { ensureExternalScaffold } from "./external-scaffold"
@@ -229,6 +229,7 @@ async function readViaServe<T>(
   capability: string,
   http: (target: WorkspaceTarget) => Promise<T>,
   cli: (options: BdOptions) => Promise<T>,
+  retryTransient = true,
 ): Promise<T> {
   const target = await targetFor(options)
   if (!target || target.mode !== "server" || !(await bdServeReadsEnabled())) return cli(options)
@@ -236,19 +237,55 @@ async function readViaServe<T>(
     await assertCurrentTarget(target)
     const scoped: ScopedOptions = { ...options, db: target.cliDbPath, __scoped: true }
     if (compareVersions(await workspaceTransition.bdVersion(), "1.3.0") < 0) return cli(scoped)
+    // A cold remote serve takes several seconds to complete DB readiness.
+    // The first tree can use the already validated CLI route while serve warms
+    // for subsequent reads; this preserves the single flat-list request.
+    if (capability === "issues.list" && !serveManager.hasReadySession(target)) {
+      serveManager.prewarm(target)
+      console.debug(`[bd-serve] CLI read workspace=${target.id} capability=issues.list reason=cold_start`)
+      return cli(scoped)
+    }
+    const started = performance.now()
+    let retriesUsed = 0
     try {
-      const session = await serveManager.getSession(target)
+      let retriesLeft = retryTransient ? 1 : 0
+      const withTransientRetry = async <R>(operation: () => Promise<R>): Promise<R> => {
+        try {
+          return await operation()
+        } catch (error) {
+          const transient =
+            error instanceof ServeHttpError &&
+            (error.status === 503 || error.kind === "transport")
+          const delay = error instanceof ServeHttpError && error.status === 503
+            ? (error.retryAfter ?? 0) * 1_000
+            : 200
+          // A server-specified delay beyond the UI budget means no HTTP retry.
+          if (!transient || retriesLeft === 0 || delay > 1_500) throw error
+          retriesLeft -= 1
+          retriesUsed += 1
+          await new Promise((resolve) => setTimeout(resolve, Math.max(delay, 100)))
+          return operation()
+        }
+      }
+      const session = await withTransientRetry(() => serveManager.getSession(target))
       if (!session.hasCapability(capability)) {
         console.debug(`[bd-serve] CLI fallback workspace=${target.id} capability=${capability} reason=unsupported`)
         return cli(scoped)
       }
-      const result = await http(target)
-      console.debug(`[bd-serve] HTTP read workspace=${target.id} capability=${capability}`)
+      const result = await withTransientRetry(() => http(target))
+      console.debug(`[bd-serve] HTTP read workspace=${target.id} capability=${capability} elapsedMs=${Math.round(performance.now() - started)} retries=${retriesUsed}`)
       return result
     } catch (error) {
       if (!mayFallbackToCli(error, target)) throw error
       const reason = error instanceof ServeHttpError ? error.kind : "unknown"
-      console.debug(`[bd-serve] CLI fallback workspace=${target.id} capability=${capability} reason=${reason}`)
+      const status = error instanceof ServeHttpError ? (error.status ?? 0) : 0
+      const retryAfter = error instanceof ServeHttpError && typeof error.retryAfter === "number"
+        ? error.retryAfter : "none"
+      const code = error instanceof ServeHttpError && error.code && /^[a-z0-9_]+$/.test(error.code)
+        ? error.code : "none"
+      const requestId = error instanceof ServeHttpError && error.requestId && /^[a-zA-Z0-9_-]{1,80}$/.test(error.requestId)
+        ? error.requestId : "none"
+      console.warn(`[bd-serve] CLI fallback workspace=${target.id} capability=${capability} reason=${reason} status=${status} code=${code} request_id=${requestId} retry_after=${retryAfter} elapsedMs=${Math.round(performance.now() - started)} retries=${retriesUsed}`)
       return cli(scoped)
     }
   })
@@ -258,13 +295,7 @@ function detailFromServe(target: WorkspaceTarget, id: string): Promise<IssueDeta
   const key = `${target.id}:${target.generation}:${id}`
   let pending = detailReads.get(key)
   if (!pending) {
-    pending = serveManager.getSession(target).then((session) =>
-      session.getIssue(id, {
-        includeComments: true,
-        includeDependents: true,
-        briefDeps: true,
-      }),
-    )
+    pending = serveManager.getSession(target).then((session) => session.getFullIssue(id))
     detailReads.set(key, pending)
     void pending.finally(() => detailReads.delete(key)).catch(() => {})
   }
@@ -801,6 +832,61 @@ export async function getComments(id: string, options: BdOptions = {}): Promise<
   )
 }
 
+export interface BdDetailRead {
+  bead: BdBead
+  comments: BdComment[]
+  dependencies: BdDependency[]
+  dependents: BdDependency[]
+}
+
+// The detail panel chooses one transport for the whole response. A 503 must
+// never combine an HTTP issue with CLI comments or dependency lists.
+export async function readBeadDetail(
+  id: string,
+  options: BdOptions = {},
+): Promise<BdDetailRead> {
+  const safeId = assertSafeBeadId(id)
+  return readViaServe(
+    options,
+    "issues.get",
+    async (target) => {
+      const detail = await detailFromServe(target, safeId)
+      return {
+        bead: detail as unknown as BdBead,
+        comments: (detail.comments ?? []) as unknown as BdComment[],
+        dependencies: (detail.dependencies ?? []) as unknown as BdDependency[],
+        dependents: (detail.dependents ?? []) as unknown as BdDependency[],
+      }
+    },
+    async (scoped) => {
+      const [shown, comments, dependencies, dependents] = await Promise.allSettled([
+        bdExec<BdBead[]>(["show", safeId], scoped),
+        bdExec<BdComment[]>(["comments", safeId], scoped),
+        bdExec<BdDependency[]>(["dep", "list", safeId], scoped),
+        bdExec<BdDependency[]>(["dep", "list", safeId, "--direction=up"], scoped),
+      ])
+      if (shown.status === "rejected") {
+        if (
+          shown.reason instanceof BdError &&
+          shown.reason.message.includes(`Issue ${safeId} not found`)
+        )
+          throw new Error(`Issue not found: ${safeId}`)
+        throw shown.reason
+      }
+      if (!shown.value[0]) throw new Error(`Issue not found: ${safeId}`)
+      if (comments.status === "rejected") throw comments.reason
+      if (dependencies.status === "rejected") throw dependencies.reason
+      if (dependents.status === "rejected") throw dependents.reason
+      return {
+        bead: shown.value[0],
+        comments: comments.value,
+        dependencies: dependencies.value,
+        dependents: dependents.value,
+      }
+    },
+  )
+}
+
 // Add a comment to a bead
 export async function addComment(id: string, text: string, options: BdOptions = {}): Promise<void> {
   await bdExecRaw(buildCommentArgs(id, text), options)
@@ -839,19 +925,17 @@ export async function updateStatus(
 
 // Get custom statuses from bd config
 export async function getCustomStatuses(options: BdOptions = {}): Promise<string[]> {
-  try {
-    const result = await bdExecRaw(["config", "get", "status.custom"], options)
-    // Result may be a comma-separated list or single status
-    const trimmed = result.trim()
+  const parse = (value: string | null): string[] => {
+    const trimmed = value?.trim() ?? ""
     if (!trimmed || trimmed.includes("(not set)")) return []
-    return trimmed
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean)
-  } catch {
-    // Config key doesn't exist or other error
-    return []
+    return trimmed.split(",").map((s) => s.trim()).filter(Boolean)
   }
+  return readViaServe(
+    options,
+    "config.get",
+    async (target) => parse(await (await serveManager.getSession(target)).getSetting("status.custom")),
+    async (scoped) => parse(await bdExecRaw(["config", "get", "status.custom"], scoped)),
+  )
 }
 
 // Replace the custom-status list in bd config. Empty list unsets the key.
@@ -958,34 +1042,38 @@ export async function deleteBead(id: string, options: BdOptions = {}): Promise<v
 export async function listBeads(options: BdOptions = {}): Promise<BdBead[]> {
   const args = ["list", "--status", "all", "--limit", "0"]
   args.push("--flat")
-  if (!options.includeSystem)
-    return readViaServe(
-      options,
-      "issues.list",
-      async (target) =>
-        (await (
-          await serveManager.getSession(target)
-        ).listIssues({ all: true, limit: 0 })) as unknown as BdBead[],
-      (scoped) => bdExec<BdBead[]>(args, scoped),
-    )
-
-  // Full view must not silently omit a category on older bd releases.
-  const flags = ["--include-gates", "--include-infra", "--include-templates"]
-  try {
-    return await bdExec<BdBead[]>([...args, ...flags], options)
-  } catch (error) {
-    const message = `${(error as { stderr?: string }).stderr ?? ""} ${String(error)}`
-    const unsupported = message.match(
-      /unknown flag:\s*['"]?(--include-(?:gates|infra|templates))/i,
-    )?.[1]
-    if (unsupported) {
-      throw new Error(
-        `The installed bd does not support ${unsupported}; upgrade bd to use All issues view`,
-        { cause: error },
-      )
-    }
-    throw error
-  }
+  return readViaServe(
+    options,
+    "issues.list",
+    async (target) =>
+      (await (await serveManager.getSession(target)).listIssues({
+        all: true,
+        limit: 0,
+        ...(options.includeSystem
+          ? { include_gates: true, include_infra: true, include_templates: true }
+          : {}),
+      })) as unknown as BdBead[],
+    async (scoped) => {
+      if (!options.includeSystem) return bdExec<BdBead[]>(args, scoped)
+      // Full view must not silently omit a category on older bd releases.
+      const flags = ["--include-gates", "--include-infra", "--include-templates"]
+      try {
+        return await bdExec<BdBead[]>([...args, ...flags], scoped)
+      } catch (error) {
+        const message = `${(error as { stderr?: string }).stderr ?? ""} ${String(error)}`
+        const unsupported = message.match(
+          /unknown flag:\s*['"]?(--include-(?:gates|infra|templates))/i,
+        )?.[1]
+        if (unsupported) {
+          throw new Error(
+            `The installed bd does not support ${unsupported}; upgrade bd to use All issues view`,
+            { cause: error },
+          )
+        }
+        throw error
+      }
+    },
+  )
 }
 
 interface BdTypesResult {
@@ -1646,9 +1734,7 @@ export async function listMoleculesForFormula(
   formulaName: string,
   options: BdOptions = {},
 ): Promise<MoleculeCard[]> {
-  const args = ["list", "--type", "epic", "--status", "all", "--limit", "0"]
-  args.push("--flat")
-  const epics = await bdExec<BdBead[]>(args, options)
+  const epics = await listEpics(options)
   return epics
     .filter((b) => b.id.startsWith("bb-mol-") && b.title.startsWith(formulaName))
     .map((b) => ({
