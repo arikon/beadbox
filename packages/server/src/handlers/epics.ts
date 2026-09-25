@@ -8,7 +8,7 @@
 // for kkrpc frames). index.ts also redirects console.log globally as a
 // belt-and-suspenders, but the explicit rewrite here documents the intent.
 
-import { basename, dirname, resolve } from "path"
+import { basename, dirname, resolve } from "node:path"
 import {
   type BdBead,
   type BdComment,
@@ -17,11 +17,9 @@ import {
   getComments,
   getDataFingerprint,
   listBeads,
-  listDependencies,
-  listDependents,
   mapPriority,
   mapType,
-  showBead,
+  readBeadDetail,
 } from "../lib/bd"
 import type { BdLoadError } from "../lib/bd-error"
 import { toBdLoadError } from "../lib/bd-error"
@@ -30,9 +28,9 @@ import {
   getBeadDetailCacheStats,
   getCachedBeadDetail,
   getCachedDbPath,
-  getCachedIncludeSystem,
   getCachedEpics,
   getCachedFingerprintParts,
+  getCachedIncludeSystem,
   hasCachedResult,
   parseFingerprint,
   setCachedBeadDetail,
@@ -40,7 +38,10 @@ import {
 } from "../lib/epic-cache"
 import { consumeEpicPrefetch, startEpicPrefetch } from "../lib/epic-prefetch"
 import { matchRig, parseRoutes } from "../lib/routes"
+import { ServeHttpError } from "../lib/serve-http"
 import type { Bead, BeadPriority, BeadStatus, Comment, Epic } from "../lib/types"
+import { workspaceTransition } from "../lib/workspace-transition"
+import { workspaceTargetOptions } from "./workspace-target-options"
 
 // Convert bd ISO date string to Date
 function toDate(isoString?: string): Date | undefined {
@@ -284,14 +285,18 @@ async function buildEpicHierarchy(options: BdOptions = {}): Promise<Epic[]> {
       epic.childEpics = []
     }
     const childBelowNonEpic = belowNonEpic || !hierarchicalTypes.has(bead.type)
-    for (const child of bead.children ?? []) normalizeNestedEpics(child, childBelowNonEpic)
+    bead.children?.forEach((child) => {
+      normalizeNestedEpics(child, childBelowNonEpic)
+    })
     if ("childEpics" in bead) {
-      for (const child of (bead as Epic).childEpics ?? []) {
+      ;(bead as Epic).childEpics?.forEach((child) => {
         normalizeNestedEpics(child, childBelowNonEpic)
-      }
+      })
     }
   }
-  for (const epic of topLevelEpics) normalizeNestedEpics(epic)
+  topLevelEpics.forEach((epic) => {
+    normalizeNestedEpics(epic)
+  })
 
   // Attach rigName from routes.jsonl (Gastown multi-rig workspaces)
   const dbPath = options.db || process.cwd()
@@ -320,8 +325,8 @@ export type EpicResult =
   | { success: true; epics: Epic[] }
   | { success: false; bdLoadError: BdLoadError }
 
-async function getEpicsCore(dbPath?: string, includeSystem = false): Promise<EpicResult> {
-  const options: BdOptions = { ...(dbPath ? { db: dbPath } : {}), includeSystem }
+async function getEpicsCoreUnscoped(options: BdOptions): Promise<EpicResult> {
+  const dbPath = options.db
   try {
     const epics = await buildEpicHierarchy(options)
     // beadbox-jk7 / cascade-9 diagnostic. Sidecar-side proof of what the
@@ -355,20 +360,38 @@ async function getEpicsCore(dbPath?: string, includeSystem = false): Promise<Epi
   }
 }
 
+function getEpicsCore(options: BdOptions): Promise<EpicResult> {
+  const run = () => getEpicsCoreUnscoped(options)
+  return options.workspaceId ? workspaceTransition.withOperation(options.workspaceId, run) : run()
+}
+
 // Get all epics with their hierarchy.
 // Checks for a prefetched result first (started during health check).
 export async function getEpics(dbPath?: string, includeSystem = false): Promise<EpicResult> {
-  const prefetched = includeSystem ? null : consumeEpicPrefetch(dbPath)
+  const resolved = await workspaceTargetOptions(dbPath)
+  const options = { ...resolved.options, includeSystem }
+  const prefetched = includeSystem ? null : consumeEpicPrefetch(resolved.dbPath)
   if (prefetched) {
     console.error("[epics] using prefetched epic data")
     return prefetched
   }
-  return getEpicsCore(dbPath, includeSystem)
+  return getEpicsCore(options)
 }
 
 // Start prefetching epic data.
 export async function prefetchEpicData(dbPath?: string): Promise<void> {
-  startEpicPrefetch(dbPath, () => getEpicsCore(dbPath))
+  try {
+    const resolved = await workspaceTargetOptions(dbPath)
+    startEpicPrefetch(resolved.dbPath, async () => {
+      try {
+        return await getEpicsCore(resolved.options)
+      } catch (error) {
+        return { success: false, bdLoadError: toBdLoadError(error) }
+      }
+    })
+  } catch (error) {
+    console.warn(`[epics] prefetch skipped: ${error instanceof Error ? error.message : error}`)
+  }
 }
 
 // bb-3gnz.5: dropped the maybePatchByMaxUpdatedAt + maybePatchByCommentFp
@@ -391,12 +414,30 @@ async function fullRebuild(options: BdOptions): Promise<EpicResult> {
 }
 
 // Incremental refresh: detect change scope and take the fastest path.
-export async function incrementalRefresh(dbPath?: string, includeSystem = false): Promise<EpicResult> {
-  const options: BdOptions = { ...(dbPath ? { db: dbPath } : {}), includeSystem }
-  const dbKey = dbPath ?? ""
+export async function incrementalRefresh(
+  dbPath?: string,
+  includeSystem = false,
+): Promise<EpicResult> {
+  const resolved = await workspaceTargetOptions(dbPath)
+  const options: BdOptions = { ...resolved.options, includeSystem }
+  const dbKey = resolved.dbPath ?? ""
 
+  const run = () => incrementalRefreshCore(options, dbKey, includeSystem)
+  return options.workspaceId ? workspaceTransition.withOperation(options.workspaceId, run) : run()
+}
+
+async function incrementalRefreshCore(
+  options: BdOptions,
+  dbKey: string,
+  includeSystem: boolean,
+): Promise<EpicResult> {
   try {
-    if (!hasCachedResult() || getCachedDbPath() !== dbKey || getCachedIncludeSystem() !== includeSystem) return fullRebuild(options)
+    if (
+      !hasCachedResult() ||
+      getCachedDbPath() !== dbKey ||
+      getCachedIncludeSystem() !== includeSystem
+    )
+      return fullRebuild(options)
 
     const cachedParts = getCachedFingerprintParts()
     if (!cachedParts) return fullRebuild(options)
@@ -430,7 +471,7 @@ export async function incrementalRefresh(dbPath?: string, includeSystem = false)
     // post-event refresh contract if a future Dolt batch-commit mode
     // lands and HEAD becomes stable across writes.
     return fullRebuild(options)
-  } catch (error) {
+  } catch {
     try {
       return await fullRebuild(options)
     } catch (rebuildError) {
@@ -441,7 +482,7 @@ export async function incrementalRefresh(dbPath?: string, includeSystem = false)
 
 // Fetch blocks/dependency data separately for deferred loading.
 export async function getBlocksDependencies(dbPath?: string): Promise<Record<string, string[]>> {
-  const options: BdOptions = dbPath ? { db: dbPath } : {}
+  const { options } = await workspaceTargetOptions(dbPath)
 
   try {
     const blocksDeps = await getAllBlocksDependencies(options)
@@ -459,9 +500,18 @@ export async function getBlocksDependencies(dbPath?: string): Promise<Record<str
 
 // Get a single bead with full details
 export async function getBeadDetail(id: string, dbPath?: string): Promise<Bead | null> {
-  const options: BdOptions = dbPath ? { db: dbPath } : {}
+  const { options, target, dbPath: resolvedPath } = await workspaceTargetOptions(dbPath)
+  const run = () => getBeadDetailCore(id, options, target?.mode === "server", resolvedPath)
+  return options.workspaceId ? workspaceTransition.withOperation(options.workspaceId, run) : run()
+}
 
-  if (hasCachedResult() && getCachedDbPath() === (dbPath ?? "")) {
+async function getBeadDetailCore(
+  id: string,
+  options: BdOptions,
+  serverMode: boolean,
+  resolvedPath?: string,
+): Promise<Bead | null> {
+  if (hasCachedResult() && getCachedDbPath() === (resolvedPath ?? "")) {
     const cached = getCachedBeadDetail(id)
     if (cached) {
       console.error(`[bd] show (cache hit) for ${id}`)
@@ -471,27 +521,16 @@ export async function getBeadDetail(id: string, dbPath?: string): Promise<Bead |
 
   try {
     let readOptions = options
-    if (dbPath) {
-      const mode = await readMetadataMode(dbPath)
-      if (mode === "server") {
-        readOptions = { ...options, parallel: true }
-      }
+    if (serverMode) {
+      readOptions = { ...options, parallel: true }
     }
 
-    // beadbox-a9l: comment bodies come from the dedicated, version-stable
-    // `bd comments <id> --json` subcommand (getComments) rather than from
-    // bd show — bd show omits bodies by default and its --include-comments
-    // flag is version-gated (fails on CI's older bd). getComments runs in
-    // the SAME parallel batch as showBead, so there is no added round-trip
-    // vs. reading them inline; both are cheaper than the pre-b09d6ccc
-    // design's serial getComments call. Falls back to an empty list so a
-    // comments fetch failure never blocks the rest of the detail panel.
-    const [bdBead, bdComments, deps, dependents] = await Promise.all([
-      showBead(id, readOptions),
-      getComments(id, readOptions).catch(() => []),
-      listDependencies(id, readOptions).catch(() => []),
-      listDependents(id, readOptions).catch(() => []),
-    ])
+    const {
+      bead: bdBead,
+      comments: bdComments,
+      dependencies: deps,
+      dependents,
+    } = await readBeadDetail(id, readOptions)
 
     const comments = bdComments.map(convertComment)
     const bead = convertBead(bdBead, comments)
@@ -512,8 +551,11 @@ export async function getBeadDetail(id: string, dbPath?: string): Promise<Bead |
     setCachedBeadDetail(result)
 
     return result
-  } catch {
-    return null
+  } catch (error) {
+    if (error instanceof ServeHttpError && error.status === 404 && error.code === "not_found")
+      return null
+    if (error instanceof Error && error.message === `Issue not found: ${id}`) return null
+    throw error
   }
 }
 
@@ -534,7 +576,7 @@ export async function getCacheStats(): Promise<{
 
 /** @internal Used by tests only; no production consumers. */
 export async function getBeadComments(id: string, dbPath?: string): Promise<Comment[]> {
-  const options: BdOptions = dbPath ? { db: dbPath } : {}
+  const { options } = await workspaceTargetOptions(dbPath)
 
   try {
     const bdComments = await getComments(id, options)

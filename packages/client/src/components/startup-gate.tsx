@@ -160,6 +160,8 @@ export function StartupGate({ children }: StartupGateProps) {
 
   // Run health check when phase === "checking"
   useEffect(() => {
+    // Retrying increments this nonce to rerun the health check in the same phase.
+    void checkNonce
     if (state.phase !== "checking") return
     let cancelled = false
 

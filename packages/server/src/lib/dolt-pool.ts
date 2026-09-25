@@ -4,9 +4,16 @@
 import { readFileSync } from "fs"
 import { readFile } from "fs/promises"
 import mysql from "mysql2/promise"
-import { basename, dirname, join } from "path"
-import { getWorkspacePassword } from "./bd"
-import { findExternalWorkspaceByDbPath, parseServerUri } from "./workspace-registry"
+import { basename, dirname, join, resolve } from "path"
+import { getWorkspacePassword } from "./credential-provider"
+import {
+  findExternalWorkspaceByDbPath,
+  findWorkspace,
+  findWorkspaceByDbPath,
+  getServerOwnership,
+  parseServerUri,
+  readRegistry,
+} from "./workspace-registry"
 
 /** Thrown when dolt-server.port doesn't exist yet (server not started). */
 export class PortFileMissingError extends Error {
@@ -96,12 +103,36 @@ interface CachedPool {
 
 const poolCache = new Map<string, CachedPool>()
 
-export async function getPool(dbPath: string): Promise<mysql.Pool> {
-  const key = dbPath.startsWith("server://") ? dbPath : normalizeDbPath(dbPath)
+export async function getPool(dbPath: string, workspaceId?: string): Promise<mysql.Pool> {
+  const key = workspaceId ?? (dbPath.startsWith("server://") ? dbPath : normalizeDbPath(dbPath))
   const cached = poolCache.get(key)
 
-  // Server-only workspace: parse connection from URI
-  const server = parseServerUri(dbPath)
+  // The UUID preserves the full connection identity when multiple records
+  // share a legacy server:// address but differ in user or TLS settings.
+  const parsedServer = parseServerUri(dbPath)
+  const registry = await readRegistry()
+  const registryEntry = workspaceId
+    ? findWorkspace(registry, workspaceId)
+    : parsedServer
+      ? findWorkspaceByDbPath(registry, dbPath)
+      : null
+  if (workspaceId && !registryEntry) throw new Error(`Workspace not found: ${workspaceId}`)
+  if (workspaceId && registryEntry) {
+    const local = registryEntry.local?.path
+    const expectedUri =
+      registryEntry.server &&
+      `server://${registryEntry.server.host}:${registryEntry.server.port}/${registryEntry.server.database}`
+    const samePath = local
+      ? [local, join(local, "beads.db"), join(local, "dolt")].some(
+          (path) => resolve(dbPath) === resolve(path),
+        )
+      : dbPath === expectedUri
+    if (!samePath) throw new Error(`Workspace database path changed: ${workspaceId}`)
+  }
+  const server =
+    registryEntry && getServerOwnership(registryEntry) === "managed"
+      ? null
+      : (registryEntry?.server ?? parsedServer)
   const external = server ? null : findExternalWorkspaceByDbPath(dbPath)?.server
   let host: string
   let port: number
@@ -117,7 +148,7 @@ export async function getPool(dbPath: string): Promise<mysql.Pool> {
     database = connection.database
     user = connection.user
     tls = connection.tls
-    const serverKey = `${host}:${port}/${database}`
+    const serverKey = `${host}:${port}/${database}/${user}`
     password = getWorkspacePassword(serverKey)
   } else {
     host = "127.0.0.1"
@@ -228,8 +259,8 @@ function isConnectionError(code: string | undefined, errno: number | undefined):
   )
 }
 
-export async function drainPool(dbPath: string): Promise<void> {
-  const key = dbPath.startsWith("server://") ? dbPath : normalizeDbPath(dbPath)
+export async function drainPool(dbPath: string, workspaceId?: string): Promise<void> {
+  const key = workspaceId ?? (dbPath.startsWith("server://") ? dbPath : normalizeDbPath(dbPath))
   const cached = poolCache.get(key)
   if (!cached) return
   poolCache.delete(key)

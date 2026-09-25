@@ -13,6 +13,8 @@ import { promisify } from "node:util"
 import { buildEnv, getBdPath } from "../lib/bd"
 import { isValidDbPath } from "../lib/path-validation"
 import { findWorkspaceByDbPath, getBeadboxRegistryPath, getServerOwnership, type WorkspaceRegistry } from "../lib/workspace-registry"
+import { resolveWorkspaceTarget } from "../lib/workspace-resolver"
+import { workspaceTransition } from "../lib/workspace-transition"
 
 const execFileAsync = promisify(execFile)
 
@@ -82,6 +84,26 @@ export async function runRecoveryCommand(
     return { success: false, error: "Recovery commands are unavailable for an externally managed Dolt server" }
   }
 
+  let targetId: string
+  try {
+    targetId = (await resolveWorkspaceTarget(databasePath)).id
+    await workspaceTransition.preflightBdBinary()
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) }
+  }
+  try {
+    return await workspaceTransition.runStorageTransition(targetId, () =>
+      executeRecoveryCommand(args, databasePath),
+    )
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+async function executeRecoveryCommand(
+  args: string[],
+  databasePath: string,
+): Promise<{ success: boolean; output?: string; error?: string }> {
   const bdPath = getBdPath()
   const normalizedDb = normalizeDbPath(databasePath)
   const cwd = projectRootFromDb(databasePath)
@@ -149,10 +171,6 @@ export async function migrateToServerMode(
     return { success: false, error: "Migration is unavailable for an externally managed Dolt server" }
   }
 
-  const bdPath = getBdPath()
-  const normalizedDb = normalizeDbPath(databasePath)
-  const cwd = projectRootFromDb(databasePath)
-
   let prefix: string
   try {
     prefix = await readPrefix(databasePath)
@@ -163,6 +181,30 @@ export async function migrateToServerMode(
       error: "Could not read workspace prefix from metadata.json",
     }
   }
+
+  let targetId: string
+  try {
+    targetId = (await resolveWorkspaceTarget(databasePath)).id
+    await workspaceTransition.preflightBdBinary()
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) }
+  }
+  try {
+    return await workspaceTransition.runStorageTransition(targetId, () =>
+      executeMigration(databasePath, prefix),
+    )
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+async function executeMigration(
+  databasePath: string,
+  prefix: string,
+): Promise<{ success: boolean; failedStep?: MigrationStep; error?: string }> {
+  const bdPath = getBdPath()
+  const normalizedDb = normalizeDbPath(databasePath)
+  const cwd = projectRootFromDb(databasePath)
 
   const run = async (args: string[], timeoutMs = 60_000) => {
     const { stdout, stderr } = await execFileAsync(bdPath, [...args, "--db", normalizedDb], {

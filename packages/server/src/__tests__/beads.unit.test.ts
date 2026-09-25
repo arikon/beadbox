@@ -182,7 +182,7 @@ describe("handlers/beads (read-only return shape)", () => {
 
   test("getAvailableTypes propagates unavailable workspace errors", async () => {
     await expect(beads.getAvailableTypes("/nonexistent/path/.beads/dolt"))
-      .rejects.toThrow(/ENOENT|no such file/)
+      .rejects.toThrow(/Workspace not found/)
   })
 
   test("checkBeadExists returns boolean", async () => {

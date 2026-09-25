@@ -27,7 +27,7 @@ import {
   Wrench,
   Zap,
 } from "lucide-react"
-import React, { useState } from "react"
+import { useState } from "react"
 import { CopyableId } from "@/components/copyable-id"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
@@ -35,7 +35,7 @@ import { useViewport } from "@/hooks/use-viewport"
 import { type BadgeConfig, getStatusConfig, PillBadge, priorityConfig } from "@/lib/badge-config"
 import { getUnreadReason, isBeadUnread } from "@/lib/local-storage"
 import type { GateInfo } from "@/lib/molecule-phases"
-import type { Bead, BeadPriority, ReadState } from "@/lib/types"
+import type { Bead, ReadState } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 interface BeadTableProps {
@@ -442,7 +442,7 @@ function BeadRow({
                         beadParts.length > 1 &&
                         depParts[0] === beadParts[0]
                       ) {
-                        return "." + depParts.slice(1).join(".")
+                        return `.${depParts.slice(1).join(".")}`
                       }
                       return dep.id
                     })

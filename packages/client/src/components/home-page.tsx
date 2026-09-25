@@ -3,17 +3,10 @@ import { toast } from "sonner"
 import { BeadDetailPanel } from "@/components/bead-detail-panel"
 import { BeadTable } from "@/components/bead-table"
 import { BeadTableBulkToolbar } from "@/components/bead-table-bulk-toolbar"
+import { DevConsole } from "@/components/dev-console"
 import { EpicTree } from "@/components/epic-tree"
 import { FilterBar, type Filters } from "@/components/filter-bar"
 import { Header } from "@/components/header"
-import { getAnalyticsEnabled, markAllBeadsRead, markBeadRead } from "@/lib/local-storage"
-import { safeCapture } from "@/lib/posthog-safe"
-import { isMoleculePresentation } from "@/lib/molecule-presentation"
-import { rpc } from "@/lib/rpc"
-import { sortEpics } from "@/lib/sort"
-import { useSubscriptionChangeSignal } from "@/lib/subscribe"
-
-import { DevConsole } from "@/components/dev-console"
 import { useBdHealth, useWorkspaceGate } from "@/components/startup-gate"
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable"
 import { useAppHealth } from "@/hooks/use-app-health"
@@ -26,6 +19,12 @@ import { usePreferences } from "@/hooks/use-preferences"
 import { useUpdateChecker } from "@/hooks/use-update-checker"
 import { useViewport } from "@/hooks/use-viewport"
 import { useWorkspaceLifecycle } from "@/hooks/use-workspace-lifecycle"
+import { getAnalyticsEnabled, markAllBeadsRead, markBeadRead } from "@/lib/local-storage"
+import { isMoleculePresentation } from "@/lib/molecule-presentation"
+import { safeCapture } from "@/lib/posthog-safe"
+import { rpc } from "@/lib/rpc"
+import { sortEpics } from "@/lib/sort"
+import { useSubscriptionChangeSignal } from "@/lib/subscribe"
 import type { Bead, Epic } from "@/lib/types"
 
 const getBlocksDependencies = rpc.epics.getBlocksDependencies
@@ -191,7 +190,6 @@ function BeadsEpicsViewer() {
     setFatal,
   })
   const {
-    workspaces,
     currentWorkspace,
     includeSystem,
     setIncludeSystem,
@@ -219,15 +217,10 @@ function BeadsEpicsViewer() {
     availableStatuses,
     customStatusChain,
     refreshAvailableStatuses,
-    loadInProgressRef,
-    lastLoadCompletedRef,
-    pendingRefreshRef,
     hasExistingDataRef,
-    workspaceSourceRef,
     loadEpics,
     handleManualRetry,
     handleRefresh,
-    handleRemoveWorkspace,
     doRemoveWorkspace,
   } = lifecycle
 
@@ -256,7 +249,13 @@ function BeadsEpicsViewer() {
     ? (typesByWorkspace[currentWorkspace.id] ?? readTypeFilter(currentWorkspace.id))
     : "all"
   const typeOptions = useMemo(
-    () => [...new Set([...availableTypes, ...epics.map((epic) => epic.type), ...flattenEpicsToBeads(epics).map((bead) => bead.type)])],
+    () => [
+      ...new Set([
+        ...availableTypes,
+        ...epics.map((epic) => epic.type),
+        ...flattenEpicsToBeads(epics).map((bead) => bead.type),
+      ]),
+    ],
     [availableTypes, epics],
   )
   const filteredEpics = useMemo(
@@ -477,8 +476,7 @@ function BeadsEpicsViewer() {
     return () => {
       if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filters.search])
+  }, [filters.search, filteredEpics])
 
   // beadbox-s5z: bead-list auto-refresh on subscription change.
   // bb-pgb0.1 (delete useWebSocket shim, commit 5580928) claimed real-time
@@ -507,12 +505,13 @@ function BeadsEpicsViewer() {
     setEpicEpoch((prev) => prev + 1)
   }, [subscriptionSignal, currentWorkspace?.databasePath, loadEpics])
   useEffect(() => {
+    void epicEpoch
     if (isLoading || !currentWorkspace?.databasePath || epics.length === 0) return
 
     const loadId = ++blocksLoadIdRef.current
-    const dbPath = currentWorkspace.databasePath
+    const workspaceId = currentWorkspace.id
 
-    getBlocksDependencies(dbPath).then((blocksMap) => {
+    getBlocksDependencies(workspaceId).then((blocksMap) => {
       if (blocksLoadIdRef.current !== loadId) return // stale
       if (Object.keys(blocksMap).length === 0) return
 
@@ -567,8 +566,14 @@ function BeadsEpicsViewer() {
         return patched.some((e, i) => e !== prev[i]) ? patched : prev
       })
     })
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- setEpics is a stable setState, epics.length tracks structural changes
-  }, [isLoading, currentWorkspace?.databasePath, epics.length, epicEpoch])
+  }, [
+    isLoading,
+    currentWorkspace?.databasePath,
+    currentWorkspace?.id,
+    epics.length,
+    epicEpoch,
+    setEpics,
+  ])
 
   // bb-pgb0.1: deleted ~130 lines of dead WebSocket-shim plumbing
   // (handleSSEChange + bdCmdHandlerRef + lifecycleHandlerRef +
@@ -671,7 +676,7 @@ function BeadsEpicsViewer() {
     if (ids.length === 0) return
     setIsBulkArchiving(true)
     try {
-      const result = await rpc.beads.archiveBeads(ids, currentWorkspace?.databasePath)
+      const result = await rpc.beads.archiveBeads(ids, currentWorkspace?.id)
       const failed = result.results.filter((r) => !r.success)
       if (failed.length > 0) {
         toast.error(
@@ -688,13 +693,14 @@ function BeadsEpicsViewer() {
     } finally {
       setIsBulkArchiving(false)
     }
-  }, [beadSelection, currentWorkspace?.databasePath, loadEpics])
+  }, [beadSelection, currentWorkspace?.id, loadEpics])
 
   // bb-y729: prune selection on filter change so beads that filter out drop
   // from the selection set (per spec: 'filter change → selection prunes to
   // remaining-visible rows'). Filter-bar already triggers re-render of
   // activeEpicsWithFilteredStandalone, so we walk those + flatBeads.
   useEffect(() => {
+    void filters
     if (beadSelection.selectedIds.size === 0) return
     const visible = new Set<string>()
     const collect = (items: (Bead | Epic)[]) => {
@@ -714,10 +720,10 @@ function BeadsEpicsViewer() {
     collect(archivedEpics)
     collect(archivedBeads)
     beadSelection.pruneTo(Array.from(visible))
-    // pruneTo is stable; we only want to run when filters change
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     filters,
+    beadSelection.selectedIds.size,
+    beadSelection.pruneTo,
     flatBeads,
     activeEpicsWithFilteredStandalone,
     activeMilestonesFiltered,
@@ -732,6 +738,8 @@ function BeadsEpicsViewer() {
   const groupedBeads = useMemo(() => {
     const groupedFilters: Filters = {
       ...filters,
+      type: selectedType,
+      includeSystem,
       rig: filters.rig !== "all" && rigNames.length === 0 ? "all" : filters.rig,
     }
     return collectGroupedVisibleBeads(
@@ -756,6 +764,8 @@ function BeadsEpicsViewer() {
     backlogBeads,
     archivedBeads,
     filters,
+    selectedType,
+    includeSystem,
     rigNames,
   ])
 
@@ -861,8 +871,13 @@ function BeadsEpicsViewer() {
         style={devConsole.open ? { marginBottom: devConsole.height } : undefined}
       >
         {typeCatalogError && (
-          <div role="alert" className="mb-3 flex items-center justify-between gap-3 rounded border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-300">
-            <span>Could not load issue types: {typeCatalogError}. Type changes are unavailable.</span>
+          <div
+            role="alert"
+            className="mb-3 flex items-center justify-between gap-3 rounded border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-300"
+          >
+            <span>
+              Could not load issue types: {typeCatalogError}. Type changes are unavailable.
+            </span>
             <button
               type="button"
               onClick={retryAvailableTypes}
@@ -886,7 +901,11 @@ function BeadsEpicsViewer() {
               selectedType={selectedType}
               onTypeChange={(type) => {
                 if (!currentWorkspace) return
-                try { localStorage.setItem(`beadbox:issue-type:${currentWorkspace.id}`, type) } catch { /* storage may be unavailable */ }
+                try {
+                  localStorage.setItem(`beadbox:issue-type:${currentWorkspace.id}`, type)
+                } catch {
+                  /* storage may be unavailable */
+                }
                 setTypesByWorkspace((current) => ({ ...current, [currentWorkspace.id]: type }))
               }}
               includeSystem={includeSystem}
@@ -920,7 +939,7 @@ function BeadsEpicsViewer() {
                   onDelete={setDeleteConfirmId}
                   onBeadNavigate={handleBeadNavigate}
                   parentPath={parentPath}
-                  dbPath={currentWorkspace?.databasePath}
+                  dbPath={currentWorkspace?.id}
                   assignees={assignees}
                   availableStatuses={availableStatuses}
                   availableTypes={typeOptions}
@@ -1192,7 +1211,7 @@ function BeadsEpicsViewer() {
                   onDelete={setDeleteConfirmId}
                   onBeadNavigate={handleBeadNavigate}
                   parentPath={parentPath}
-                  dbPath={currentWorkspace?.databasePath}
+                  dbPath={currentWorkspace?.id}
                   assignees={assignees}
                   availableStatuses={availableStatuses}
                   availableTypes={typeOptions}
@@ -1216,6 +1235,7 @@ function BeadsEpicsViewer() {
         zoomLevel={zoomLevel}
         onZoomChange={handleZoomChange}
         databasePath={currentWorkspace?.databasePath}
+        workspaceId={currentWorkspace?.id}
         vimNavigationEnabled={vimEnabled}
         onVimNavigationChange={handleVimNavigationChange}
         updateCheckEnabled={updateCheckEnabled}

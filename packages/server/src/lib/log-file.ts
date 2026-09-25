@@ -12,17 +12,21 @@ import { closeSync, mkdirSync, openSync, writeSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 
-function resolveLogPath(): string {
+export function getSidecarLogDirectory(): string {
   if (process.platform === "darwin") {
-    return join(homedir(), "Library", "Logs", "Beadbox", "beadbox-sidecar.log")
+    return join(homedir(), "Library", "Logs", "Beadbox")
   }
   if (process.platform === "win32") {
     const localAppData = process.env.LOCALAPPDATA ?? join(homedir(), "AppData", "Local")
-    return join(localAppData, "Beadbox", "Logs", "beadbox-sidecar.log")
+    return join(localAppData, "Beadbox", "Logs")
   }
   // Linux + everything else: XDG_STATE_HOME with the spec's fallback.
   const stateHome = process.env.XDG_STATE_HOME ?? join(homedir(), ".local", "state")
-  return join(stateHome, "beadbox", "beadbox-sidecar.log")
+  return join(stateHome, "beadbox")
+}
+
+function resolveLogPath(): string {
+  return join(getSidecarLogDirectory(), "beadbox-sidecar.log")
 }
 
 let logFd: number | null = null

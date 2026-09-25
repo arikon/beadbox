@@ -11,7 +11,7 @@ import type { Epic } from "../lib/types"
 
 afterEach(cleanup)
 
-function issue(id: string, title: string, type: Epic["type"]): Epic {
+function issue(id: string, title: string, type: string): Epic {
   return {
     id,
     title,
@@ -57,7 +57,7 @@ test("groups only root milestones and epics while keeping nested epics under the
 test("milestone drag keeps its type and cannot become a loose bead or its own descendant", () => {
   const milestone = issue("milestone", "Release milestone", "milestone")
   const nested = issue("nested-epic", "Nested epic", "epic")
-  nested.children = [{ ...nested, id: "task", title: "Nested task", type: "task" }]
+  nested.children = [issue("task", "Nested task", "task")]
   milestone.childEpics = [nested]
   const onBeadMove = mock(() => {})
   const canMoveEpic = mock(() => false)

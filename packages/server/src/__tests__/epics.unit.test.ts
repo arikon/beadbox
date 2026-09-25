@@ -81,9 +81,12 @@ describe("handlers/epics — system issue visibility", () => {
   beforeAll(async () => {
     gateWorkspace = await createBdWorkspace()
     await runBdInWorkspace(["config", "set", "types.custom", "gate"], gateWorkspace.root)
-    const created = JSON.parse(await runBdInWorkspace(
-      ["create", "Gate issue", "--type", "gate", "--json"], gateWorkspace.root,
-    )) as { id: string }
+    const created = JSON.parse(
+      await runBdInWorkspace(
+        ["create", "Gate issue", "--type", "gate", "--json"],
+        gateWorkspace.root,
+      ),
+    ) as { id: string }
     gateId = created.id
   })
 
@@ -197,10 +200,16 @@ describe("handlers/epics — molecule type fidelity", () => {
   })
 
   test("full view keeps a molecule root and its child", async () => {
-    const created = JSON.parse(await runBdInWorkspace(
-      ["create", "Molecule root", "--type", "molecule", "--json"], moleculeWorkspace.root,
-    )) as { id: string }
-    await runBdInWorkspace(["update", moleculeWorkspace.seedIds.test2, "--parent", created.id], moleculeWorkspace.root)
+    const created = JSON.parse(
+      await runBdInWorkspace(
+        ["create", "Molecule root", "--type", "molecule", "--json"],
+        moleculeWorkspace.root,
+      ),
+    ) as { id: string }
+    await runBdInWorkspace(
+      ["update", moleculeWorkspace.seedIds.test2, "--parent", created.id],
+      moleculeWorkspace.root,
+    )
 
     const result = await epics.getEpics(moleculeWorkspace.dbPath, true)
     expect(result.success).toBe(true)
@@ -288,15 +297,30 @@ describe("handlers/epics — epic below a non-epic parent", () => {
   })
 
   test("decision → epic → nested epic → task appears once at every level", async () => {
-    const decision = JSON.parse(await runBdInWorkspace(
-      ["create", "Decision parent", "--type", "decision", "--json"], nestedWorkspace.root,
-    )) as { id: string }
-    const nestedEpic = JSON.parse(await runBdInWorkspace(
-      ["create", "Nested epic", "--type", "epic", "--json"], nestedWorkspace.root,
-    )) as { id: string }
-    await runBdInWorkspace(["update", nestedWorkspace.seedIds.epic1, "--parent", decision.id], nestedWorkspace.root)
-    await runBdInWorkspace(["update", nestedEpic.id, "--parent", nestedWorkspace.seedIds.epic1], nestedWorkspace.root)
-    await runBdInWorkspace(["update", nestedWorkspace.seedIds.test1, "--parent", nestedEpic.id], nestedWorkspace.root)
+    const decision = JSON.parse(
+      await runBdInWorkspace(
+        ["create", "Decision parent", "--type", "decision", "--json"],
+        nestedWorkspace.root,
+      ),
+    ) as { id: string }
+    const nestedEpic = JSON.parse(
+      await runBdInWorkspace(
+        ["create", "Nested epic", "--type", "epic", "--json"],
+        nestedWorkspace.root,
+      ),
+    ) as { id: string }
+    await runBdInWorkspace(
+      ["update", nestedWorkspace.seedIds.epic1, "--parent", decision.id],
+      nestedWorkspace.root,
+    )
+    await runBdInWorkspace(
+      ["update", nestedEpic.id, "--parent", nestedWorkspace.seedIds.epic1],
+      nestedWorkspace.root,
+    )
+    await runBdInWorkspace(
+      ["update", nestedWorkspace.seedIds.test1, "--parent", nestedEpic.id],
+      nestedWorkspace.root,
+    )
 
     const result = await epics.getEpics(nestedWorkspace.dbPath)
     expect(result.success).toBe(true)
@@ -304,19 +328,32 @@ describe("handlers/epics — epic below a non-epic parent", () => {
 
     const standalone = result.epics.find((epic) => epic.id === "_standalone")
     const decisionNode = standalone?.children.find((bead) => bead.id === decision.id)
-    const epicNode = decisionNode?.children?.find((bead) => bead.id === nestedWorkspace.seedIds.epic1)
+    const epicNode = decisionNode?.children?.find(
+      (bead) => bead.id === nestedWorkspace.seedIds.epic1,
+    )
     const nestedEpicNode = epicNode?.children?.find((bead) => bead.id === nestedEpic.id)
     expect(decisionNode?.type).toBe("decision")
     expect(epicNode?.type).toBe("epic")
     expect(nestedEpicNode?.type).toBe("epic")
-    expect(nestedEpicNode?.children?.map((bead) => bead.id)).toContain(nestedWorkspace.seedIds.test1)
+    expect(nestedEpicNode?.children?.map((bead) => bead.id)).toContain(
+      nestedWorkspace.seedIds.test1,
+    )
     expect((epicNode as typeof standalone | undefined)?.childEpics).toHaveLength(0)
 
     type TreeNode = { id: string; children?: TreeNode[]; childEpics?: TreeNode[] }
     const allIds = result.epics.flatMap(function visit(node: TreeNode): string[] {
-      return [node.id, ...(node.children ?? []).flatMap(visit), ...(node.childEpics ?? []).flatMap(visit)]
+      return [
+        node.id,
+        ...(node.children ?? []).flatMap(visit),
+        ...(node.childEpics ?? []).flatMap(visit),
+      ]
     })
-    for (const id of [decision.id, nestedWorkspace.seedIds.epic1, nestedEpic.id, nestedWorkspace.seedIds.test1]) {
+    for (const id of [
+      decision.id,
+      nestedWorkspace.seedIds.epic1,
+      nestedEpic.id,
+      nestedWorkspace.seedIds.test1,
+    ]) {
       expect(allIds.filter((seen) => seen === id)).toHaveLength(1)
     }
   })

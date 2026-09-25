@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto"
-import { readFileSync } from "fs"
+import { readFileSync, realpathSync } from "fs"
 import { mkdir, readFile, rename, stat, unlink, writeFile } from "fs/promises"
 import { homedir } from "os"
 import { basename, dirname, join, resolve } from "path"
@@ -50,7 +50,10 @@ export function getServerOwnership(entry: RegistryEntry): ServerOwnership | null
   try {
     const metadata = JSON.parse(readFileSync(join(entry.local.path, "metadata.json"), "utf-8"))
     if (typeof metadata.dolt_server_port === "number") return "external"
-    if (metadata.dolt_server_host && !["127.0.0.1", "localhost", "::1"].includes(metadata.dolt_server_host)) {
+    if (
+      metadata.dolt_server_host &&
+      !["127.0.0.1", "localhost", "::1"].includes(metadata.dolt_server_host)
+    ) {
       return "external"
     }
     return metadata.dolt_mode === "server" ? "managed" : "unknown"
@@ -128,40 +131,46 @@ export function findWorkspaceByDbPath(
   registry: WorkspaceRegistry,
   databasePath: string,
 ): RegistryEntry | null {
-  // Match server:// URIs against registry entries
+  // Legacy paths omit UUID (and server:// also omits user and TLS). Never
+  // silently choose an entry when multiple registry records match.
+  let matches: RegistryEntry[]
   if (databasePath.startsWith("server://")) {
-    for (const entry of registry.workspaces) {
-      if (entry.server) {
-        const uri = `server://${entry.server.host}:${entry.server.port}/${entry.server.database}`
-        if (uri === databasePath) return entry
+    matches = registry.workspaces.filter(
+      (entry) =>
+        entry.server &&
+        `server://${entry.server.host}:${entry.server.port}/${entry.server.database}` ===
+          databasePath,
+    )
+  } else {
+    const path = resolve(databasePath)
+    const normalized = basename(dirname(path)) === ".beads" ? dirname(path) : path
+    const canonical = (candidate: string) => {
+      try {
+        return realpathSync(candidate)
+      } catch {
+        return resolve(candidate)
       }
     }
-    return null
+    matches = registry.workspaces.filter(
+      (entry) => entry.local && canonical(entry.local.path) === canonical(normalized),
+    )
   }
-  const normalized = resolve(databasePath)
-  for (const entry of registry.workspaces) {
-    if (entry.local && resolve(entry.local.path) === normalized) return entry
-  }
-  return null
+  if (matches.length > 1) throw new Error(`Ambiguous workspace database path: ${databasePath}`)
+  return matches[0] ?? null
 }
 
 /** Resolve a scaffold-backed external connection from a bd database path. */
 export function findExternalWorkspaceByDbPath(dbPath: string): RegistryEntry | null {
   if (dbPath.startsWith("server://")) return null
-  const path = resolve(dbPath)
-  const beadsPath = basename(path) === ".beads" ? path : basename(dirname(path)) === ".beads" ? dirname(path) : path
+  let registry: WorkspaceRegistry
   try {
-    const registry = JSON.parse(readFileSync(getBeadboxRegistryPath(), "utf-8")) as WorkspaceRegistry
-    if (!Array.isArray(registry.workspaces)) return null
-    return registry.workspaces.find(
-      (entry) =>
-        entry.local?.path &&
-        resolve(entry.local.path) === beadsPath &&
-        getServerOwnership(entry) === "external",
-    ) ?? null
+    registry = JSON.parse(readFileSync(getBeadboxRegistryPath(), "utf-8")) as WorkspaceRegistry
   } catch {
     return null
   }
+  if (!Array.isArray(registry.workspaces)) return null
+  const entry = findWorkspaceByDbPath(registry, dbPath)
+  return entry && getServerOwnership(entry) === "external" ? entry : null
 }
 
 /**
@@ -210,9 +219,10 @@ export async function readWorkspaceMetadata(beadsDir: string): Promise<Workspace
       return {
         mode: "server",
         serverHost: typeof meta.dolt_server_host === "string" ? meta.dolt_server_host : "127.0.0.1",
-        serverPort: typeof meta.dolt_server_port === "number"
-          ? meta.dolt_server_port
-          : (await readWorkspacePortFile(beadsDir)) ?? 3307,
+        serverPort:
+          typeof meta.dolt_server_port === "number"
+            ? meta.dolt_server_port
+            : ((await readWorkspacePortFile(beadsDir)) ?? 3307),
         serverDatabase: typeof meta.dolt_database === "string" ? meta.dolt_database : "beads",
         serverUser: typeof meta.dolt_server_user === "string" ? meta.dolt_server_user : "root",
         serverTls: meta.dolt_server_tls === true,
@@ -314,7 +324,7 @@ async function readRegistryUnqueued(): Promise<{ registry: WorkspaceRegistry; mi
     if (parsed !== null) {
       const record = parsed as Partial<WorkspaceRegistry> & Partial<V1Registry>
       if (record.version === 2) {
-        const registry = deduplicateEntries(parsed as WorkspaceRegistry)
+        const registry = filterInvalidEntries(parsed as WorkspaceRegistry)
         return { registry, migrated: persistInferredOwnership(registry) }
       }
       // v1 registry (no version field): migrate
@@ -324,7 +334,7 @@ async function readRegistryUnqueued(): Promise<{ registry: WorkspaceRegistry; mi
           : [],
         activeWorkspace: typeof record.activeWorkspace === "string" ? record.activeWorkspace : null,
       }
-      const registry = deduplicateEntries(migrateV1ToV2(v1))
+      const registry = filterInvalidEntries(migrateV1ToV2(v1))
       persistInferredOwnership(registry)
       return { registry, migrated: true }
     }
@@ -333,10 +343,10 @@ async function readRegistryUnqueued(): Promise<{ registry: WorkspaceRegistry; mi
   // No registry (or an unusable one): attempt migration from legacy registry
   const legacy = await migrateFromLegacyRegistry()
   if (legacy.workspaces.length > 0) {
-    const registry = deduplicateEntries(
+    const registry = filterInvalidEntries(
       migrateV1ToV2({
-          workspaces: legacy.workspaces,
-          activeWorkspace: legacy.activeWorkspace,
+        workspaces: legacy.workspaces,
+        activeWorkspace: legacy.activeWorkspace,
       }),
     )
     persistInferredOwnership(registry)
@@ -357,42 +367,22 @@ async function quarantineUnreadableRegistry(registryPath: string, reason: string
 }
 
 /**
- * Remove duplicate entries from a registry. Deduplicates by:
- * - local.path (resolved) for local workspaces
- * - host+port+database for server-only workspaces
- * Keeps the first entry for each identity.
+ * Remove structurally unusable entries. Shared physical storage is allowed:
+ * distinct UUIDs must remain visible so legacy lookups can reject ambiguity.
  */
-function deduplicateEntries(registry: WorkspaceRegistry): WorkspaceRegistry {
+function filterInvalidEntries(registry: WorkspaceRegistry): WorkspaceRegistry {
   // Runs on whatever JSON.parse produced, so nothing here may throw on an odd
   // shape: a hand-edited or half-migrated registry must lose the bad entry,
   // not send the caller down the "corrupt file" path.
   if (!Array.isArray(registry.workspaces)) registry.workspaces = []
 
-  const seenLocalPaths = new Set<string>()
-  const seenServerKeys = new Set<string>()
-  const before = registry.workspaces.length
-
   registry.workspaces = registry.workspaces.filter((entry) => {
     if (!entry || typeof entry !== "object") return false
     if (entry.local) {
       if (typeof entry.local.path !== "string") return false
-      const key = resolve(entry.local.path)
-      if (seenLocalPaths.has(key)) return false
-      seenLocalPaths.add(key)
-    }
-    if (!entry.local && entry.server) {
-      const key = `${entry.server.host}:${entry.server.port}/${entry.server.database}`
-      if (seenServerKeys.has(key)) return false
-      seenServerKeys.add(key)
     }
     return true
   })
-
-  if (registry.workspaces.length < before) {
-    console.log(
-      `[beadbox-registry] deduplicated ${before - registry.workspaces.length} entries on load`,
-    )
-  }
 
   return registry
 }
