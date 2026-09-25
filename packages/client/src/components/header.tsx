@@ -167,7 +167,7 @@ export function Header({
   const { isMobile, isTablet } = useViewport()
   const [showHint, setShowHint] = useState(false)
   const [healthDetailsOpen, setHealthDetailsOpen] = useState(false)
-  const hasTrains = useHasTrains(currentWorkspace.databasePath)
+  const hasTrains = useHasTrains(currentWorkspace.id)
 
   const navigateTo = useCallback(
     (destination: string, source: "tab" | "dropdown") => {

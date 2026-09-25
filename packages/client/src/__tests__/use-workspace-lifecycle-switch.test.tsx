@@ -46,9 +46,9 @@ function epic(id: string): Epic {
   return { id, type: "epic", title: id, children: [] } as unknown as Epic
 }
 
-const EPICS_BY_DB: Record<string, Epic[]> = {
-  [alpha.databasePath as string]: [epic("alpha-1")],
-  [beta.databasePath as string]: [epic("beta-1"), epic("beta-2")],
+const EPICS_BY_WORKSPACE: Record<string, Epic[]> = {
+  [alpha.id]: [epic("alpha-1")],
+  [beta.id]: [epic("beta-1"), epic("beta-2")],
 }
 
 type LifecycleResult = ReturnType<typeof useWorkspaceLifecycle>
@@ -79,10 +79,9 @@ function mountLifecycle(
   let calls = 0
   let pendingResolve: (() => void) | null = null
 
-  const getEpics = mock((dbPath?: string) => {
+  const getEpics = mock((workspaceId?: string) => {
     calls += 1
-    const key = (dbPath ?? "").replace(/\/beads\.db$/, "")
-    const payload = { success: true as const, epics: EPICS_BY_DB[key] ?? [] }
+    const payload = { success: true as const, epics: EPICS_BY_WORKSPACE[workspaceId ?? ""] ?? [] }
     if (options.deferAfter !== undefined && calls > options.deferAfter) {
       return new Promise<typeof payload>((resolve) => {
         pendingResolve = () => resolve(payload)

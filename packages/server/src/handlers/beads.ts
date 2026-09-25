@@ -13,7 +13,6 @@ import { homedir, tmpdir } from "os"
 import { basename, dirname, extname, isAbsolute, relative, resolve } from "path"
 
 import {
-  type BdOptions,
   addComment as bdAddComment,
   addLabel as bdAddLabel,
   closeBead as bdCloseBead,
@@ -39,10 +38,10 @@ import {
   updateType as bdUpdateType,
   unmapPriority,
 } from "../lib/bd"
-import { readMetadataMode } from "../lib/dolt-metadata"
 import { invalidateEpicCache } from "../lib/epic-cache"
 import { RESERVED_STATUSES, validateStatusName } from "../lib/status-validation"
 import type { BeadPriority, BeadType } from "../lib/types"
+import { workspaceTargetOptions } from "./workspace-target-options"
 
 // Update bead status
 export async function updateBeadStatus(
@@ -50,7 +49,7 @@ export async function updateBeadStatus(
   status: string,
   dbPath?: string,
 ): Promise<{ success: boolean; error?: string }> {
-  const options: BdOptions = dbPath ? { db: dbPath } : {}
+  const { options } = await workspaceTargetOptions(dbPath)
   try {
     await bdUpdateStatus(id, status, options)
     return { success: true }
@@ -62,12 +61,9 @@ export async function updateBeadStatus(
 
 // Get all available statuses (core + custom)
 export async function getAvailableStatuses(dbPath?: string): Promise<string[]> {
-  const options: BdOptions = dbPath ? { db: dbPath } : {}
-  if (dbPath) {
-    const mode = await readMetadataMode(dbPath)
-    if (mode === "server") {
-      options.parallel = true
-    }
+  const { options, target } = await workspaceTargetOptions(dbPath)
+  if (target?.mode === "server") {
+    options.parallel = true
   }
   const coreStatuses = ["open", "in_progress", "closed"]
 
@@ -82,8 +78,8 @@ export async function getAvailableStatuses(dbPath?: string): Promise<string[]> {
 // `bd types` reflects the selected workspace's types.custom configuration.
 // An older bd cannot provide an accurate list of valid edit targets.
 export async function getAvailableTypes(dbPath?: string): Promise<string[]> {
-  const options: BdOptions = dbPath ? { db: dbPath } : {}
-  if (dbPath && (await readMetadataMode(dbPath)) === "server") {
+  const { options, target } = await workspaceTargetOptions(dbPath)
+  if (target?.mode === "server") {
     // bd types only reads the catalog. Server-mode reads can run alongside
     // detail requests instead of waiting behind their per-db CLI queue.
     options.parallel = true
@@ -103,7 +99,7 @@ export async function getAvailableTypes(dbPath?: string): Promise<string[]> {
 // from getAvailableStatuses, which prepends the core lifecycle statuses.
 // Ported from v0.24 actions/beads.ts (commit 1386b41 / bb-oqux) for bb-wxuw.
 export async function getCustomStatusList(dbPath?: string): Promise<string[]> {
-  const options: BdOptions = dbPath ? { db: dbPath } : {}
+  const { options } = await workspaceTargetOptions(dbPath)
   try {
     return await bdGetCustomStatuses(options)
   } catch {
@@ -133,7 +129,7 @@ export async function updateCustomStatuses(
     seen.add(name)
   }
 
-  const options: BdOptions = dbPath ? { db: dbPath } : {}
+  const { options } = await workspaceTargetOptions(dbPath)
   try {
     await bdSetCustomStatuses(cleaned, options)
     return { success: true }
@@ -153,7 +149,7 @@ export async function updateBeadPriority(
   priority: BeadPriority,
   dbPath?: string,
 ): Promise<{ success: boolean; error?: string }> {
-  const options: BdOptions = dbPath ? { db: dbPath } : {}
+  const { options } = await workspaceTargetOptions(dbPath)
   try {
     await bdUpdatePriority(id, unmapPriority(priority), options)
     return { success: true }
@@ -169,7 +165,7 @@ export async function updateBeadAssignee(
   assignee: string,
   dbPath?: string,
 ): Promise<{ success: boolean; error?: string }> {
-  const options: BdOptions = dbPath ? { db: dbPath } : {}
+  const { options } = await workspaceTargetOptions(dbPath)
   try {
     await bdUpdateAssignee(id, assignee, options)
     return { success: true }
@@ -185,7 +181,7 @@ export async function updateBeadSpecId(
   specId: string,
   dbPath?: string,
 ): Promise<{ success: boolean; error?: string }> {
-  const options: BdOptions = dbPath ? { db: dbPath } : {}
+  const { options } = await workspaceTargetOptions(dbPath)
   try {
     await bdUpdateSpecId(id, specId, options)
     return { success: true }
@@ -201,7 +197,7 @@ export async function updateBeadTitle(
   title: string,
   dbPath?: string,
 ): Promise<{ success: boolean; error?: string }> {
-  const options: BdOptions = dbPath ? { db: dbPath } : {}
+  const { options } = await workspaceTargetOptions(dbPath)
   try {
     await bdUpdateTitle(id, title, options)
     return { success: true }
@@ -217,7 +213,7 @@ export async function updateBeadType(
   type: BeadType,
   dbPath?: string,
 ): Promise<{ success: boolean; error?: string }> {
-  const options: BdOptions = dbPath ? { db: dbPath } : {}
+  const { options } = await workspaceTargetOptions(dbPath)
   try {
     await bdUpdateType(id, type, options)
     return { success: true }
@@ -232,7 +228,7 @@ export async function closeBead(
   id: string,
   dbPath?: string,
 ): Promise<{ success: boolean; error?: string }> {
-  const options: BdOptions = dbPath ? { db: dbPath } : {}
+  const { options } = await workspaceTargetOptions(dbPath)
   try {
     await bdCloseBead(id, options)
     return { success: true }
@@ -248,7 +244,7 @@ export async function addComment(
   text: string,
   dbPath?: string,
 ): Promise<{ success: boolean; error?: string }> {
-  const options: BdOptions = dbPath ? { db: dbPath } : {}
+  const { options } = await workspaceTargetOptions(dbPath)
   try {
     await bdAddComment(id, text, options)
     return { success: true }
@@ -266,7 +262,7 @@ export async function deleteCommentAction(
   if (!dbPath) {
     return { success: false, error: "Database path required" }
   }
-  const options: BdOptions = { db: dbPath }
+  const { options } = await workspaceTargetOptions(dbPath)
   try {
     await bdDeleteComment(commentId, options)
     return { success: true }
@@ -282,7 +278,7 @@ export async function updateBeadParent(
   parentId: string | null,
   dbPath?: string,
 ): Promise<{ success: boolean; error?: string; alreadyLinked?: boolean }> {
-  const options: BdOptions = dbPath ? { db: dbPath } : {}
+  const { options } = await workspaceTargetOptions(dbPath)
   try {
     await bdUpdateParent(id, parentId, options)
     return { success: true }
@@ -312,7 +308,7 @@ export async function deleteBead(
   if (!dbPath) {
     return { success: false, error: "Database path required" }
   }
-  const options: BdOptions = { db: dbPath }
+  const { options } = await workspaceTargetOptions(dbPath)
   try {
     await bdDeleteBead(id, options)
     return { success: true }
@@ -328,7 +324,7 @@ export async function archiveBead(
   archived: boolean,
   dbPath?: string,
 ): Promise<{ success: boolean; error?: string }> {
-  const options: BdOptions = dbPath ? { db: dbPath } : {}
+  const { options } = await workspaceTargetOptions(dbPath)
   try {
     if (archived) {
       await bdAddLabel(id, "archived", options)
@@ -355,7 +351,7 @@ export async function archiveBeads(
   success: boolean
   results: { id: string; success: boolean; error?: string }[]
 }> {
-  const options: BdOptions = dbPath ? { db: dbPath } : {}
+  const { options } = await workspaceTargetOptions(dbPath)
   const results: { id: string; success: boolean; error?: string }[] = []
   for (const id of ids) {
     try {
@@ -378,7 +374,7 @@ export async function backlogBead(
   inBacklog: boolean,
   dbPath?: string,
 ): Promise<{ success: boolean; error?: string }> {
-  const options: BdOptions = dbPath ? { db: dbPath } : {}
+  const { options } = await workspaceTargetOptions(dbPath)
   try {
     const priority = inBacklog ? unmapPriority("backlog") : unmapPriority("medium")
     await bdUpdatePriority(id, priority, options)
@@ -395,7 +391,7 @@ export async function addLabelAction(
   label: string,
   dbPath?: string,
 ): Promise<{ success: boolean; error?: string }> {
-  const options: BdOptions = dbPath ? { db: dbPath } : {}
+  const { options } = await workspaceTargetOptions(dbPath)
   try {
     await bdAddLabel(id, label, options)
     invalidateEpicCache()
@@ -412,7 +408,7 @@ export async function updateBeadDue(
   due: string,
   dbPath?: string,
 ): Promise<{ success: boolean; error?: string }> {
-  const options: BdOptions = dbPath ? { db: dbPath } : {}
+  const { options } = await workspaceTargetOptions(dbPath)
   try {
     await bdUpdateDue(id, due, options)
     return { success: true }
@@ -428,7 +424,7 @@ export async function updateBeadDefer(
   defer: string,
   dbPath?: string,
 ): Promise<{ success: boolean; error?: string }> {
-  const options: BdOptions = dbPath ? { db: dbPath } : {}
+  const { options } = await workspaceTargetOptions(dbPath)
   try {
     await bdUpdateDefer(id, defer, options)
     return { success: true }
@@ -444,7 +440,7 @@ export async function updateBeadEstimate(
   est: number,
   dbPath?: string,
 ): Promise<{ success: boolean; error?: string }> {
-  const options: BdOptions = dbPath ? { db: dbPath } : {}
+  const { options } = await workspaceTargetOptions(dbPath)
   try {
     await bdUpdateEstimate(id, est, options)
     return { success: true }
@@ -460,7 +456,7 @@ export async function updateBeadDesign(
   design: string,
   dbPath?: string,
 ): Promise<{ success: boolean; error?: string }> {
-  const options: BdOptions = dbPath ? { db: dbPath } : {}
+  const { options } = await workspaceTargetOptions(dbPath)
   try {
     await bdUpdateDesign(id, design, options)
     return { success: true }
@@ -476,7 +472,7 @@ export async function updateBeadTextField(
   value: string,
   dbPath?: string,
 ): Promise<{ success: boolean; error?: string }> {
-  const options: BdOptions = dbPath ? { db: dbPath } : {}
+  const { options } = await workspaceTargetOptions(dbPath)
   try {
     await bdUpdateTextField(id, field, value, options)
     return { success: true }
@@ -492,7 +488,7 @@ export async function removeDependencyAction(
   dependsOnId: string,
   dbPath?: string,
 ): Promise<{ success: boolean; error?: string }> {
-  const options: BdOptions = dbPath ? { db: dbPath } : {}
+  const { options } = await workspaceTargetOptions(dbPath)
   try {
     await bdRemoveDependency(issueId, dependsOnId, options)
     return { success: true }
@@ -507,7 +503,7 @@ export async function closeBeadChildren(
   ids: string[],
   dbPath?: string,
 ): Promise<{ success: boolean; error?: string }> {
-  const options: BdOptions = dbPath ? { db: dbPath } : {}
+  const { options } = await workspaceTargetOptions(dbPath)
   try {
     for (const id of ids) {
       await bdCloseBead(id, options)
@@ -524,7 +520,7 @@ export async function archiveBeadChildren(
   ids: string[],
   dbPath?: string,
 ): Promise<{ success: boolean; error?: string }> {
-  const options: BdOptions = dbPath ? { db: dbPath } : {}
+  const { options } = await workspaceTargetOptions(dbPath)
   try {
     for (const id of ids) {
       await bdAddLabel(id, "archived", options)
@@ -538,7 +534,7 @@ export async function archiveBeadChildren(
 
 // Check if a bead exists (returns true if found, false if deleted/not found)
 export async function checkBeadExists(id: string, dbPath?: string): Promise<boolean> {
-  const options: BdOptions = dbPath ? { db: dbPath } : {}
+  const { options } = await workspaceTargetOptions(dbPath)
   try {
     await bdShowBead(id, options)
     return true
@@ -553,7 +549,7 @@ export async function removeLabelAction(
   label: string,
   dbPath?: string,
 ): Promise<{ success: boolean; error?: string }> {
-  const options: BdOptions = dbPath ? { db: dbPath } : {}
+  const { options } = await workspaceTargetOptions(dbPath)
   try {
     await bdRemoveLabel(id, label, options)
     invalidateEpicCache()
@@ -594,9 +590,9 @@ function workspaceRootFromDbPath(dbPath: string): string {
 // Read a spec file from disk given a relative spec path and workspace databasePath
 export async function readSpecFile(
   specPath: string,
-  databasePath: string,
+  workspaceIdOrPath: string,
 ): Promise<{ success: true; content: string } | { success: false; error: string }> {
-  if (!specPath || !databasePath) {
+  if (!specPath || !workspaceIdOrPath) {
     return { success: false, error: "Missing spec path or database path" }
   }
 
@@ -605,8 +601,12 @@ export async function readSpecFile(
     return { success: false, error: "Only markdown (.md) files can be viewed" }
   }
 
-  // Resolve spec path relative to workspace root
-  const workspaceRoot = workspaceRootFromDbPath(databasePath)
+  // A server-only workspace has no local spec files to read.
+  const { target, dbPath } = await workspaceTargetOptions(workspaceIdOrPath)
+  if (!target?.localBeadsDir && !isAbsolute(dbPath ?? "")) {
+    return { success: false, error: "Workspace has no local spec files" }
+  }
+  const workspaceRoot = workspaceRootFromDbPath(target?.localBeadsDir ?? dbPath!)
   const absolutePath = resolve(workspaceRoot, specPath)
 
   // Validate path is within allowed directories

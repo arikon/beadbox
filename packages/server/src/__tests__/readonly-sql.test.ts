@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test"
+import { afterEach, expect, mock, test } from "bun:test"
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -14,6 +14,7 @@ const originalBdPath = process.env.BD_PATH
 let root: string | undefined
 
 afterEach(async () => {
+  mock.restore()
   if (originalBdPath === undefined) delete process.env.BD_PATH
   else process.env.BD_PATH = originalBdPath
   __resetBdPathCache()
@@ -21,7 +22,7 @@ afterEach(async () => {
   root = undefined
 })
 
-test("read-only SQL calls succeed while comment deletion remains writable", async () => {
+test("server reads use direct SQL while comment deletion remains writable", async () => {
   root = await mkdtemp(join(tmpdir(), "beadbox-readonly-sql-"))
   const beadsDir = join(root, ".beads")
   await mkdir(beadsDir)
@@ -47,6 +48,22 @@ esac
   )
   process.env.BD_PATH = bdPath
   __resetBdPathCache()
+
+  mock.module("../lib/dolt-pool", () => ({
+    getPool: async () => ({
+      query: async (sql: string, values: unknown[]) => {
+        if (sql.includes("DOLT_HASHOF_TABLE")) return [[{ ih: "head-a" }]]
+        if (sql.includes("updated_at > ?")) {
+          expect(values).toEqual(["2026-01-01T00:00:00Z"])
+          return [[{ id: "task-a" }]]
+        }
+        if (sql.includes("depends_on_issue_id AS depends_on_id")) {
+          return [[{ issue_id: "task-a", depends_on_id: "task-b" }]]
+        }
+        throw new Error(`Unexpected SQL: ${sql}`)
+      },
+    }),
+  }))
 
   expect(await getDataFingerprint({ db: beadsDir })).toContain("head-a")
   expect(await getChangedBeadIds("2026-01-01T00:00:00Z", { db: beadsDir })).toEqual(["task-a"])

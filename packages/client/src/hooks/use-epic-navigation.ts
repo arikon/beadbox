@@ -83,7 +83,7 @@ export function useEpicNavigation(opts: UseEpicNavigationOpts) {
   } = opts
 
   // beadbox-if6: Cmd/Ctrl+4 exists only when the workspace has .beadtrain files.
-  const hasTrains = useHasTrains(currentWorkspace?.databasePath)
+  const hasTrains = useHasTrains(currentWorkspace?.id)
   const hasTrainsRef = useRef(hasTrains)
   hasTrainsRef.current = hasTrains
 
@@ -178,7 +178,7 @@ export function useEpicNavigation(opts: UseEpicNavigationOpts) {
         return
       }
       // Data may have changed (new comments, etc.) - refetch
-      getBeadDetail(beadIdParam, currentWorkspace?.databasePath).then((fullBead) => {
+      getBeadDetail(beadIdParam, currentWorkspace?.id).then((fullBead) => {
         if (!fullBead) return
         setSelectedBead((prev) => {
           if (!prev || prev.id !== beadIdParam) return prev
@@ -196,7 +196,7 @@ export function useEpicNavigation(opts: UseEpicNavigationOpts) {
     setSelectedBead(cachedBead)
     setIsLoadingBead(true)
 
-    getBeadDetail(beadIdParam, currentWorkspace?.databasePath)
+    getBeadDetail(beadIdParam, currentWorkspace?.id)
       .then((fullBead) => {
         if (fullBead) {
           setSelectedBead(fullBead)
@@ -214,7 +214,7 @@ export function useEpicNavigation(opts: UseEpicNavigationOpts) {
         setIsLoadingBead(false)
       })
     // eslint-disable-next-line react-hooks/exhaustive-deps -- selectedBead and updateBeadInEpicsRef are refs/derived; re-running on their change would cause loops
-  }, [beadIdParam, epics, currentWorkspace?.databasePath])
+  }, [beadIdParam, epics, currentWorkspace?.id])
 
   const parentPath = useMemo(() => {
     if (!beadIdParam) return []

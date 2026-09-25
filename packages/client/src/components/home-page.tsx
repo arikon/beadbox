@@ -516,9 +516,9 @@ function BeadsEpicsViewer() {
     if (isLoading || !currentWorkspace?.databasePath || epics.length === 0) return
 
     const loadId = ++blocksLoadIdRef.current
-    const dbPath = currentWorkspace.databasePath
+    const workspaceId = currentWorkspace.id
 
-    getBlocksDependencies(dbPath).then((blocksMap) => {
+    getBlocksDependencies(workspaceId).then((blocksMap) => {
       if (blocksLoadIdRef.current !== loadId) return // stale
       if (Object.keys(blocksMap).length === 0) return
 
@@ -677,7 +677,7 @@ function BeadsEpicsViewer() {
     if (ids.length === 0) return
     setIsBulkArchiving(true)
     try {
-      const result = await rpc.beads.archiveBeads(ids, currentWorkspace?.databasePath)
+      const result = await rpc.beads.archiveBeads(ids, currentWorkspace?.id)
       const failed = result.results.filter((r) => !r.success)
       if (failed.length > 0) {
         toast.error(
@@ -939,7 +939,7 @@ function BeadsEpicsViewer() {
                   onDelete={setDeleteConfirmId}
                   onBeadNavigate={handleBeadNavigate}
                   parentPath={parentPath}
-                  dbPath={currentWorkspace?.databasePath}
+                  dbPath={currentWorkspace?.id}
                   assignees={assignees}
                   availableStatuses={availableStatuses}
                   availableTypes={typeOptions}
@@ -1211,7 +1211,7 @@ function BeadsEpicsViewer() {
                   onDelete={setDeleteConfirmId}
                   onBeadNavigate={handleBeadNavigate}
                   parentPath={parentPath}
-                  dbPath={currentWorkspace?.databasePath}
+                  dbPath={currentWorkspace?.id}
                   assignees={assignees}
                   availableStatuses={availableStatuses}
                   availableTypes={typeOptions}
@@ -1235,6 +1235,7 @@ function BeadsEpicsViewer() {
         zoomLevel={zoomLevel}
         onZoomChange={handleZoomChange}
         databasePath={currentWorkspace?.databasePath}
+        workspaceId={currentWorkspace?.id}
         vimNavigationEnabled={vimEnabled}
         onVimNavigationChange={handleVimNavigationChange}
         updateCheckEnabled={updateCheckEnabled}

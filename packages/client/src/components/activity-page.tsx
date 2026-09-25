@@ -55,7 +55,7 @@ function ActivityViewer() {
   // Cookie-resolved active workspace: the rail can switch projects without
   // remounting this route, so the resolution has to be subscribed.
   const [currentWorkspace, setCurrentWorkspace] = useActiveWorkspace(workspaces)
-  const hasTrains = useHasTrains(currentWorkspace?.databasePath)
+  const hasTrains = useHasTrains(currentWorkspace?.id)
   const [loadingWorkspaceId, setLoadingWorkspaceId] = useState<string | null>(null)
   const [isPending, startTransition] = useTransition()
   // Manual refresh signal (handleRefresh below) + subscription-driven signal
@@ -322,7 +322,7 @@ function ActivityViewer() {
       }
 
       try {
-        const result = await rpc.activity.listBeadsByStatus(databasePath)
+        const result = await rpc.activity.listBeadsByStatus(currentWorkspaceId)
         // beadbox-8k3: pass the workspace's pipeline chain so the tile set
         // reflects status.custom per pm/spec.md §4.9. Empty status.custom →
         // just the 3 built-in tiles via composePipelineChain.
@@ -381,7 +381,7 @@ function ActivityViewer() {
     if (!databasePath) return
     let cancelled = false
     rpc.beads
-      .getCustomStatusList(databasePath)
+      .getCustomStatusList(currentWorkspace?.id)
       .then((chain) => {
         if (cancelled) return
         setCustomStatusChain(chain)
@@ -472,7 +472,7 @@ function ActivityViewer() {
   // Navigate from feed item to bead detail on main page.
   const handleBeadNavigate = useCallback(
     async (beadId: string): Promise<boolean> => {
-      const exists = await rpc.beads.checkBeadExists(beadId, databasePath)
+      const exists = await rpc.beads.checkBeadExists(beadId, currentWorkspace?.id)
       if (!exists) return false
 
       setStoredSelectedBead(beadId)
@@ -480,7 +480,7 @@ function ActivityViewer() {
       navigate({ to: "/" })
       return true
     },
-    [databasePath, navigate],
+    [currentWorkspace?.id, navigate],
   )
 
   // Cross-filter chip label
@@ -740,6 +740,7 @@ function ActivityViewer() {
         zoomLevel={zoomLevel}
         onZoomChange={handleZoomChange}
         databasePath={currentWorkspace?.databasePath}
+        workspaceId={currentWorkspace?.id}
         vimNavigationEnabled={vimEnabled}
         onVimNavigationChange={handleVimNavigationChange}
         updateCheckEnabled={updateCheckEnabled}

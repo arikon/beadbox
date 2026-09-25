@@ -662,9 +662,8 @@ export function useWorkspaceLifecycle(opts: UseWorkspaceLifecycleOpts) {
     recordLoadEpicsPhase("start", gen, dbPathForStamp)
     const workspaceId = currentWorkspace?.id
     try {
-      const dbPath = currentWorkspace?.databasePath
       const getEpicsStart = Date.now()
-      const result = await rpc.epics.getEpics(dbPath, includeSystem)
+      const result = await rpc.epics.getEpics(workspaceId, includeSystem)
       if (gen !== loadGenRef.current) {
         recordLoadEpicsPhase("stale", gen, dbPathForStamp, {
           epicsLength: result.success ? result.epics.length : undefined,
@@ -708,6 +707,7 @@ export function useWorkspaceLifecycle(opts: UseWorkspaceLifecycleOpts) {
     }
   }, [
     currentWorkspace?.databasePath,
+    currentWorkspace?.id,
     includeSystem,
     handleEpicsSuccess,
     handleEpicsError,
@@ -803,7 +803,7 @@ export function useWorkspaceLifecycle(opts: UseWorkspaceLifecycleOpts) {
     }))
     if (!retry) setAvailableTypes([])
     try {
-      const types = await rpc.beads.getAvailableTypes(workspace.databasePath)
+      const types = await rpc.beads.getAvailableTypes(workspace.id)
       if (typeCatalogRequestRef.current !== request) return
       setAvailableTypes(types)
       setTypeCatalog({ workspaceId: workspace.id, status: "ready" })
@@ -829,7 +829,7 @@ export function useWorkspaceLifecycle(opts: UseWorkspaceLifecycleOpts) {
       loadEpics()
       // Fetch available statuses for this workspace
       rpc.beads
-        .getAvailableStatuses(currentWorkspace.databasePath)
+        .getAvailableStatuses(currentWorkspace.id)
         .then((statuses) => {
           if (active) setAvailableStatuses(statuses)
         })
@@ -837,7 +837,7 @@ export function useWorkspaceLifecycle(opts: UseWorkspaceLifecycleOpts) {
       // beadbox-3qo: also fetch the ordered status.custom chain for the
       // workflow advancement button (pm/spec §4.3). Empty array = button hidden.
       rpc.beads
-        .getCustomStatusList(currentWorkspace.databasePath)
+        .getCustomStatusList(currentWorkspace.id)
         .then((chain) => {
           if (active) setCustomStatusChain(chain)
         })
@@ -870,8 +870,8 @@ export function useWorkspaceLifecycle(opts: UseWorkspaceLifecycleOpts) {
   const refreshAvailableStatuses = useCallback(async () => {
     if (!currentWorkspace) return
     const [next, chain] = await Promise.all([
-      rpc.beads.getAvailableStatuses(currentWorkspace.databasePath),
-      rpc.beads.getCustomStatusList(currentWorkspace.databasePath),
+      rpc.beads.getAvailableStatuses(currentWorkspace.id),
+      rpc.beads.getCustomStatusList(currentWorkspace.id),
     ])
     setAvailableStatuses(next)
     setCustomStatusChain(chain)

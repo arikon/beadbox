@@ -20,10 +20,56 @@ export const state = {
   writer: defaultWriter as (line: string) => void,
   detectors: new Map<string, ChangeDetector>(),
   paths: new Map<string, string>(),
+  workspaceIds: new Map<string, string>(),
 }
 
 export function emitForSubscription(id: string, payload: SubscriptionEvent): void {
   state.writer(formatLine(id, payload))
+}
+
+/** Pause every known alias before a workspace transition, keeping subscription IDs stable. */
+export async function pauseWorkspaceSubscriptions(
+  workspacePaths: string[],
+): Promise<() => Promise<void>> {
+  const targets = new Set(workspacePaths.map((path) => beadsDirFromDatabasePath(path) ?? path))
+  const paused: Array<{ id: string; path: string }> = []
+  for (const [id, path] of state.paths) {
+    if (!targets.has(beadsDirFromDatabasePath(path) ?? path)) continue
+    const detector = state.detectors.get(id)
+    if (!detector) continue
+    state.detectors.delete(id)
+    paused.push({ id, path })
+    await detector.stop()
+  }
+  return async () => {
+    for (const { id, path } of paused) {
+      if (state.paths.get(id) !== path) continue
+      try {
+        state.detectors.set(
+          id,
+          await createChangeDetector(path, (event) => emitForSubscription(id, event), id, state.workspaceIds.get(id)),
+        )
+      } catch (error) {
+        state.paths.delete(id)
+        state.workspaceIds.delete(id)
+        emitForSubscription(id, { type: "polling_error" })
+        throw error
+      }
+    }
+  }
+}
+
+/** Discard subscriptions for a workspace that has been removed. */
+export async function discardWorkspaceSubscriptions(workspacePaths: string[]): Promise<void> {
+  const targets = new Set(workspacePaths.map((path) => beadsDirFromDatabasePath(path) ?? path))
+  for (const [id, path] of state.paths) {
+    if (!targets.has(beadsDirFromDatabasePath(path) ?? path)) continue
+    state.paths.delete(id)
+    state.workspaceIds.delete(id)
+    const detector = state.detectors.get(id)
+    state.detectors.delete(id)
+    await detector?.stop()
+  }
 }
 
 /** Keep subscription IDs stable while replacing pollers after an endpoint edit. */
@@ -40,10 +86,11 @@ export async function restartWorkspaceSubscriptions(workspacePath: string): Prom
     try {
       state.detectors.set(
         id,
-        await createChangeDetector(path, (event) => emitForSubscription(id, event), id),
+        await createChangeDetector(path, (event) => emitForSubscription(id, event), id, state.workspaceIds.get(id)),
       )
     } catch (error) {
       state.paths.delete(id)
+      state.workspaceIds.delete(id)
       emitForSubscription(id, { type: "polling_error" })
       throw error
     }

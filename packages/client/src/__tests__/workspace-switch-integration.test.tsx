@@ -55,10 +55,10 @@ function epic(id: string): Epic {
   return { id, type: "epic", title: id, children: [] } as unknown as Epic
 }
 
-const EPICS_BY_DB: Record<string, Epic[]> = {
-  [home.databasePath as string]: [epic("home-1")],
-  [alpha.databasePath as string]: [epic("alpha-1")],
-  [beta.databasePath as string]: [epic("beta-1")],
+const EPICS_BY_ID: Record<string, Epic[]> = {
+  [home.id]: [epic("home-1")],
+  [alpha.id]: [epic("alpha-1")],
+  [beta.id]: [epic("beta-1")],
 }
 
 // The sidecar resolves a workspace's databasePath two different ways:
@@ -70,10 +70,8 @@ function healthSpelling(workspace: Workspace): Workspace {
 }
 
 function installRpc(registry: Workspace[] = [alpha, beta], failTypesFor: string[] = []) {
-  const getEpics = mock((dbPath?: string, includeSystem?: boolean) => {
-    // bd is happy with either spelling; normalize so the fixture answers both.
-    const key = (dbPath ?? "").replace(/\/beads\.db$/, "")
-    const regular = EPICS_BY_DB[key] ?? []
+  const getEpics = mock((workspaceId?: string, includeSystem?: boolean) => {
+    const regular = EPICS_BY_ID[workspaceId ?? ""] ?? []
     return Promise.resolve({
       success: true as const,
       epics: includeSystem ? [...regular, epic("system-gate")] : regular,
@@ -192,7 +190,7 @@ afterEach(() => {
 describe("workspace switching (gate + lifecycle)", () => {
   test("type catalog failure is visible and clears on workspace switch", async () => {
     setWorkspaceCookie(alpha.id)
-    installRpc([alpha, beta], ["demo-alpha"])
+    installRpc([alpha, beta], [alpha.id])
     mountApp()
     await waitFor(() => expect(screen.getByTestId("catalog").textContent).toBe("bd types failed"))
     await clickTab(beta)

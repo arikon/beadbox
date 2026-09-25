@@ -199,7 +199,7 @@ export function FormulasView() {
   const [workspaces] = useState<Workspace[]>(initialWorkspaces)
   // Cookie-resolved active workspace (subscribed — see use-active-workspace).
   const [currentWorkspace, setCurrentWorkspace] = useActiveWorkspace(workspaces)
-  const hasTrains = useHasTrains(currentWorkspace?.databasePath)
+  const hasTrains = useHasTrains(currentWorkspace?.id)
   const [loadingWorkspaceId, setLoadingWorkspaceId] = useState<string | null>(null)
   const [isPending, startTransition] = useTransition()
 
@@ -349,7 +349,7 @@ export function FormulasView() {
     if (!databasePath) return
     setFormulasLoading(true)
     setFormulasError(null)
-    const result = await rpc.formulas.loadFormulas(databasePath)
+    const result = await rpc.formulas.loadFormulas(currentWorkspace?.id)
     if (result.success) {
       setFormulas(result.data)
     } else {
@@ -390,7 +390,7 @@ export function FormulasView() {
     }
     let cancelled = false
     setDetailLoading(true)
-    rpc.formulas.loadFormulaDetail(selectedName, databasePath).then((result) => {
+    rpc.formulas.loadFormulaDetail(selectedName, currentWorkspace?.id).then((result) => {
       if (cancelled) return
       if (result.success) {
         setDetail(result.data)
@@ -411,7 +411,7 @@ export function FormulasView() {
       return
     }
     setMoleculesLoading(true)
-    const result = await rpc.formulas.loadFormulaMolecules(selectedName, databasePath)
+    const result = await rpc.formulas.loadFormulaMolecules(selectedName, currentWorkspace?.id)
     if (result.success) {
       setMolecules(result.data)
     } else {
@@ -431,7 +431,7 @@ export function FormulasView() {
     async (molId: string) => {
       if (!detail || !databasePath) return
       setOverlayLoading(true)
-      const result = await rpc.formulas.loadMoleculeOverlay(molId, detail.steps, databasePath)
+      const result = await rpc.formulas.loadMoleculeOverlay(molId, detail.steps, currentWorkspace?.id)
       if (result.success) {
         setOverlay(result.data)
       } else {
@@ -828,6 +828,7 @@ export function FormulasView() {
         zoomLevel={zoomLevel}
         onZoomChange={handleZoomChange}
         databasePath={databasePath}
+        workspaceId={currentWorkspace?.id}
         vimNavigationEnabled={vimEnabled}
         onVimNavigationChange={handleVimNavigationChange}
         updateCheckEnabled={updateCheckEnabled}
@@ -846,7 +847,7 @@ export function FormulasView() {
           open={previewOpen}
           onOpenChange={setPreviewOpen}
           formula={detail}
-          dbPath={databasePath}
+          dbPath={currentWorkspace?.id}
         />
       )}
 
@@ -855,7 +856,7 @@ export function FormulasView() {
           open={pourOpen}
           onOpenChange={setPourOpen}
           formula={detail}
-          dbPath={databasePath}
+          dbPath={currentWorkspace?.id}
         />
       )}
 

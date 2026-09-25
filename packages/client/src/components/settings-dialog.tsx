@@ -109,6 +109,7 @@ interface SettingsDialogProps {
   zoomLevel: number
   onZoomChange: (level: number) => void
   databasePath?: string
+  workspaceId?: string
   vimNavigationEnabled: boolean
   onVimNavigationChange: (enabled: boolean) => void
   updateCheckEnabled: boolean
@@ -137,6 +138,7 @@ export function SettingsDialog({
   zoomLevel,
   onZoomChange,
   databasePath,
+  workspaceId,
   vimNavigationEnabled,
   onVimNavigationChange,
   updateCheckEnabled,
@@ -696,7 +698,7 @@ export function SettingsDialog({
             )}
             {activeTab === "workflow" && (
               <CustomStatusesManager
-                databasePath={databasePath}
+                databasePath={workspaceId ?? databasePath}
                 onStatusesChanged={onCustomStatusesChanged}
               />
             )}
