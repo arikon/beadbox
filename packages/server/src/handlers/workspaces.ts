@@ -8,11 +8,11 @@
 // The old action keeps running. P3 will switch call sites to this handler;
 // P6 will delete the action.
 
-import { constants, existsSync, readdirSync } from "fs"
-import { access, mkdir, readFile, rename, rm, stat, writeFile } from "fs/promises"
-import { randomUUID } from "crypto"
-import { homedir, tmpdir } from "os"
-import { basename, dirname, isAbsolute, join, parse, relative, resolve } from "path"
+import { randomUUID } from "node:crypto"
+import { constants, existsSync, readdirSync } from "node:fs"
+import { access, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
+import { homedir, tmpdir } from "node:os"
+import { basename, dirname, isAbsolute, join, parse, relative, resolve } from "node:path"
 import {
   discoverServerDatabases as bdDiscoverServerDatabases,
   initWorkspace as bdInit,
@@ -20,19 +20,18 @@ import {
   getWorkspaceStatus,
   initServerScaffold,
 } from "../lib/bd"
+import { drainPool } from "../lib/dolt-pool"
+import { ensureExternalScaffold } from "../lib/external-scaffold"
 import { expandHome, isValidWorkspaceDir } from "../lib/path-validation"
 import { scanPorts } from "../lib/port-scan"
 import { getPostHogNode } from "../lib/posthog-node"
-import { drainPool } from "../lib/dolt-pool"
-import { ensureExternalScaffold } from "../lib/external-scaffold"
-import { workspaceTransition } from "../lib/workspace-transition"
 import type { ScanResult, ServerDatabase, Workspace, WorkspaceCard } from "../lib/types"
 import {
   addServerWorkspaceEntry,
   findWorkspace,
   findWorkspaceByDbPath,
-  getServerOwnership,
   getBeadboxRegistryPath,
+  getServerOwnership,
   projectDirFromDatabasePath,
   type RegistryEntry,
   readRegistry,
@@ -46,6 +45,7 @@ import {
   updateWorkspaceLocal,
   updateWorkspaceServer,
 } from "../lib/workspace-registry"
+import { workspaceTransition } from "../lib/workspace-transition"
 
 // Server-side workspace logging. Prints to the Next.js terminal.
 function wsLog(fn: string, ...args: unknown[]) {
@@ -93,9 +93,10 @@ async function inlineReadWorkspaceMode(beadsDir: string): Promise<InlineWorkspac
       return {
         mode: "server",
         serverHost: typeof meta.dolt_server_host === "string" ? meta.dolt_server_host : "127.0.0.1",
-        serverPort: typeof meta.dolt_server_port === "number"
-          ? meta.dolt_server_port
-          : (await readWorkspacePortFile(beadsDir)) ?? 3307,
+        serverPort:
+          typeof meta.dolt_server_port === "number"
+            ? meta.dolt_server_port
+            : ((await readWorkspacePortFile(beadsDir)) ?? 3307),
         serverDatabase: typeof meta.dolt_database === "string" ? meta.dolt_database : "beads",
         serverUser: typeof meta.dolt_server_user === "string" ? meta.dolt_server_user : "root",
         serverTls: meta.dolt_server_tls === true,
@@ -345,7 +346,7 @@ async function inlineFindNearestBeadsDir(startPath: string): Promise<string | nu
           if (isValidWorkspacePath(beadsDir)) return beadsDir
         }
         // Fall back to SQLite
-        const { readdir } = await import("fs/promises")
+        const { readdir } = await import("node:fs/promises")
         const files = await readdir(beadsDir)
         const dbFile = files.find((f) => f.endsWith(".db") && !f.includes("/") && !f.includes("\\"))
         if (dbFile) {
@@ -684,7 +685,7 @@ async function ensureMetadataPort(dir: string, initOutput: string): Promise<void
     const port = parseInt(match[1], 10)
     if (port > 0 && port <= 65535) {
       meta.dolt_server_port = port
-      await writeFile(metaPath, JSON.stringify(meta, null, 2) + "\n")
+      await writeFile(metaPath, `${JSON.stringify(meta, null, 2)}\n`)
     }
   } catch {
     // Non-critical: workspace may still work via CWD auto-discovery
@@ -837,7 +838,7 @@ export async function discoverServerDatabases(
       }
     }
     return { success: true, databases }
-  } catch (error) {
+  } catch {
     return {
       success: false,
       error:

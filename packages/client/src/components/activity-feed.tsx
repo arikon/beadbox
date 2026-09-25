@@ -294,9 +294,8 @@ export function ActivityFeed({
         }
       })
     }
-    // Only run once after first successful load
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loading])
+    // loadAndClearScrollPosition consumes the saved value on the first successful load.
+  }, [loading, events.length])
 
   // React to changeSignal (WebSocket change events) with debounce
   useEffect(() => {

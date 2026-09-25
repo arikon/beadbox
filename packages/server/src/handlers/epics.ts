@@ -8,7 +8,7 @@
 // for kkrpc frames). index.ts also redirects console.log globally as a
 // belt-and-suspenders, but the explicit rewrite here documents the intent.
 
-import { basename, dirname, resolve } from "path"
+import { basename, dirname, resolve } from "node:path"
 import {
   type BdBead,
   type BdComment,
@@ -24,14 +24,13 @@ import {
 import type { BdLoadError } from "../lib/bd-error"
 import { toBdLoadError } from "../lib/bd-error"
 import { readMetadataMode } from "../lib/dolt-metadata"
-import { ServeHttpError } from "../lib/serve-http"
 import {
   getBeadDetailCacheStats,
   getCachedBeadDetail,
   getCachedDbPath,
-  getCachedIncludeSystem,
   getCachedEpics,
   getCachedFingerprintParts,
+  getCachedIncludeSystem,
   hasCachedResult,
   parseFingerprint,
   setCachedBeadDetail,
@@ -39,6 +38,7 @@ import {
 } from "../lib/epic-cache"
 import { consumeEpicPrefetch, startEpicPrefetch } from "../lib/epic-prefetch"
 import { matchRig, parseRoutes } from "../lib/routes"
+import { ServeHttpError } from "../lib/serve-http"
 import type { Bead, BeadPriority, BeadStatus, Comment, Epic } from "../lib/types"
 import { workspaceTransition } from "../lib/workspace-transition"
 import { workspaceTargetOptions } from "./workspace-target-options"
@@ -278,12 +278,18 @@ async function buildEpicHierarchy(options: BdOptions = {}): Promise<Epic[]> {
       epic.childEpics = []
     }
     const childBelowNonEpic = belowNonEpic || !hierarchicalTypes.has(bead.type)
-    bead.children?.forEach((child) => normalizeNestedEpics(child, childBelowNonEpic))
+    bead.children?.forEach((child) => {
+      normalizeNestedEpics(child, childBelowNonEpic)
+    })
     if ("childEpics" in bead) {
-      ;(bead as Epic).childEpics?.forEach((child) => normalizeNestedEpics(child, childBelowNonEpic))
+      ;(bead as Epic).childEpics?.forEach((child) => {
+        normalizeNestedEpics(child, childBelowNonEpic)
+      })
     }
   }
-  topLevelEpics.forEach((epic) => normalizeNestedEpics(epic))
+  topLevelEpics.forEach((epic) => {
+    normalizeNestedEpics(epic)
+  })
 
   // Attach rigName from routes.jsonl (Gastown multi-rig workspaces)
   const dbPath = options.db || process.cwd()
@@ -458,7 +464,7 @@ async function incrementalRefreshCore(
     // post-event refresh contract if a future Dolt batch-commit mode
     // lands and HEAD becomes stable across writes.
     return fullRebuild(options)
-  } catch (error) {
+  } catch {
     try {
       return await fullRebuild(options)
     } catch (rebuildError) {
@@ -512,8 +518,12 @@ async function getBeadDetailCore(
       readOptions = { ...options, parallel: true }
     }
 
-    const { bead: bdBead, comments: bdComments, dependencies: deps, dependents } =
-      await readBeadDetail(id, readOptions)
+    const {
+      bead: bdBead,
+      comments: bdComments,
+      dependencies: deps,
+      dependents,
+    } = await readBeadDetail(id, readOptions)
 
     const comments = bdComments.map(convertComment)
     const bead = convertBead(bdBead, comments)

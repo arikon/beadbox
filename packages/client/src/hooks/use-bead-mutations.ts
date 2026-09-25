@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react"
 import { toast } from "sonner"
 import { trackedAction } from "@/lib/capture-action-failed"
 import { getAnalyticsEnabled, getArchiveHintShown, setArchiveHintShown } from "@/lib/local-storage"
@@ -81,7 +81,7 @@ export function useBeadMutations({ bead, dbPath, onUpdate }: UseBeadMutationsOpt
   // ---------------------------------------------------------------------------
   // Sync from bead prop
   // ---------------------------------------------------------------------------
-  useEffect(() => {
+  const syncFromBead = useEffectEvent(() => {
     if (bead) {
       setTitle(bead.title)
       setDescription(bead.description)
@@ -98,33 +98,38 @@ export function useBeadMutations({ bead, dbPath, onUpdate }: UseBeadMutationsOpt
       setEstimatedMinutes(bead.estimatedMinutes)
       setLabels(bead.labels || [])
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- syncs all bead fields; individual field deps listed explicitly, bead object reference intentionally excluded to avoid infinite loops
-  }, [
-    bead?.id,
-    bead?.title,
-    bead?.description,
-    bead?.design,
-    bead?.acceptanceCriteria,
-    bead?.notes,
-    bead?.type,
-    bead?.status,
-    bead?.priority,
-    bead?.assignee,
-    bead?.specId,
-    bead?.dueAt,
-    bead?.deferUntil,
-    bead?.estimatedMinutes,
-    bead?.updatedAt,
-    JSON.stringify(bead?.labels),
-  ])
+  })
+  const beadSyncKey =
+    bead &&
+    JSON.stringify([
+      bead.id,
+      bead.title,
+      bead.description,
+      bead.design,
+      bead.acceptanceCriteria,
+      bead.notes,
+      bead.type,
+      bead.status,
+      bead.priority,
+      bead.assignee,
+      bead.specId,
+      bead.dueAt,
+      bead.deferUntil,
+      bead.estimatedMinutes,
+      bead.updatedAt,
+      bead.labels,
+    ])
+  useEffect(() => {
+    if (beadSyncKey) syncFromBead()
+  }, [beadSyncKey])
 
   // Reset field states on bead change
+  const beadId = bead?.id
   useEffect(() => {
-    if (bead) {
+    if (beadId) {
       setFieldStates(initialFieldStates)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- only reset field states on bead identity change
-  }, [bead?.id])
+  }, [beadId])
 
   // ---------------------------------------------------------------------------
   // Debounced title save
@@ -472,7 +477,10 @@ export function useBeadMutations({ bead, dbPath, onUpdate }: UseBeadMutationsOpt
   )
 
   const saveTextField = useCallback(
-    async (field: "description" | "acceptanceCriteria" | "notes", value: string): Promise<boolean> => {
+    async (
+      field: "description" | "acceptanceCriteria" | "notes",
+      value: string,
+    ): Promise<boolean> => {
       if (!bead) return false
       if (value === (bead[field] || "")) return true
       setFieldSaving(field)

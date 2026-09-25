@@ -3,17 +3,10 @@ import { toast } from "sonner"
 import { BeadDetailPanel } from "@/components/bead-detail-panel"
 import { BeadTable } from "@/components/bead-table"
 import { BeadTableBulkToolbar } from "@/components/bead-table-bulk-toolbar"
+import { DevConsole } from "@/components/dev-console"
 import { EpicTree } from "@/components/epic-tree"
 import { FilterBar, type Filters } from "@/components/filter-bar"
 import { Header } from "@/components/header"
-import { getAnalyticsEnabled, markAllBeadsRead, markBeadRead } from "@/lib/local-storage"
-import { safeCapture } from "@/lib/posthog-safe"
-import { isMoleculePresentation } from "@/lib/molecule-presentation"
-import { rpc } from "@/lib/rpc"
-import { sortEpics } from "@/lib/sort"
-import { useSubscriptionChangeSignal } from "@/lib/subscribe"
-
-import { DevConsole } from "@/components/dev-console"
 import { useBdHealth, useWorkspaceGate } from "@/components/startup-gate"
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable"
 import { useAppHealth } from "@/hooks/use-app-health"
@@ -26,6 +19,12 @@ import { usePreferences } from "@/hooks/use-preferences"
 import { useUpdateChecker } from "@/hooks/use-update-checker"
 import { useViewport } from "@/hooks/use-viewport"
 import { useWorkspaceLifecycle } from "@/hooks/use-workspace-lifecycle"
+import { getAnalyticsEnabled, markAllBeadsRead, markBeadRead } from "@/lib/local-storage"
+import { isMoleculePresentation } from "@/lib/molecule-presentation"
+import { safeCapture } from "@/lib/posthog-safe"
+import { rpc } from "@/lib/rpc"
+import { sortEpics } from "@/lib/sort"
+import { useSubscriptionChangeSignal } from "@/lib/subscribe"
 import type { Bead, Epic } from "@/lib/types"
 
 const getBlocksDependencies = rpc.epics.getBlocksDependencies
@@ -191,7 +190,6 @@ function BeadsEpicsViewer() {
     setFatal,
   })
   const {
-    workspaces,
     currentWorkspace,
     includeSystem,
     setIncludeSystem,
@@ -219,15 +217,10 @@ function BeadsEpicsViewer() {
     availableStatuses,
     customStatusChain,
     refreshAvailableStatuses,
-    loadInProgressRef,
-    lastLoadCompletedRef,
-    pendingRefreshRef,
     hasExistingDataRef,
-    workspaceSourceRef,
     loadEpics,
     handleManualRetry,
     handleRefresh,
-    handleRemoveWorkspace,
     doRemoveWorkspace,
   } = lifecycle
 
@@ -483,8 +476,7 @@ function BeadsEpicsViewer() {
     return () => {
       if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filters.search])
+  }, [filters.search, filteredEpics])
 
   // beadbox-s5z: bead-list auto-refresh on subscription change.
   // bb-pgb0.1 (delete useWebSocket shim, commit 5580928) claimed real-time
@@ -513,6 +505,7 @@ function BeadsEpicsViewer() {
     setEpicEpoch((prev) => prev + 1)
   }, [subscriptionSignal, currentWorkspace?.databasePath, loadEpics])
   useEffect(() => {
+    void epicEpoch
     if (isLoading || !currentWorkspace?.databasePath || epics.length === 0) return
 
     const loadId = ++blocksLoadIdRef.current
@@ -573,8 +566,14 @@ function BeadsEpicsViewer() {
         return patched.some((e, i) => e !== prev[i]) ? patched : prev
       })
     })
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- setEpics is a stable setState, epics.length tracks structural changes
-  }, [isLoading, currentWorkspace?.databasePath, epics.length, epicEpoch])
+  }, [
+    isLoading,
+    currentWorkspace?.databasePath,
+    currentWorkspace?.id,
+    epics.length,
+    epicEpoch,
+    setEpics,
+  ])
 
   // bb-pgb0.1: deleted ~130 lines of dead WebSocket-shim plumbing
   // (handleSSEChange + bdCmdHandlerRef + lifecycleHandlerRef +
@@ -694,13 +693,14 @@ function BeadsEpicsViewer() {
     } finally {
       setIsBulkArchiving(false)
     }
-  }, [beadSelection, currentWorkspace?.databasePath, loadEpics])
+  }, [beadSelection, currentWorkspace?.id, loadEpics])
 
   // bb-y729: prune selection on filter change so beads that filter out drop
   // from the selection set (per spec: 'filter change → selection prunes to
   // remaining-visible rows'). Filter-bar already triggers re-render of
   // activeEpicsWithFilteredStandalone, so we walk those + flatBeads.
   useEffect(() => {
+    void filters
     if (beadSelection.selectedIds.size === 0) return
     const visible = new Set<string>()
     const collect = (items: (Bead | Epic)[]) => {
@@ -720,10 +720,10 @@ function BeadsEpicsViewer() {
     collect(archivedEpics)
     collect(archivedBeads)
     beadSelection.pruneTo(Array.from(visible))
-    // pruneTo is stable; we only want to run when filters change
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     filters,
+    beadSelection.selectedIds.size,
+    beadSelection.pruneTo,
     flatBeads,
     activeEpicsWithFilteredStandalone,
     activeMilestonesFiltered,

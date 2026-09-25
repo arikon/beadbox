@@ -14,7 +14,6 @@ import {
 import posthog from "posthog-js"
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react"
 import { CommentsSection } from "@/components/bead-comments-section"
-import { safeCapture } from "@/lib/posthog-safe"
 import { BeadDependenciesDisplay } from "@/components/bead-dependencies-display"
 import {
   captureDetailPanelAction,
@@ -45,11 +44,12 @@ import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { useBeadMutations } from "@/hooks/use-bead-mutations"
-import { isMoleculePresentation } from "@/lib/molecule-presentation"
 import { useCommentNavigation } from "@/hooks/use-comment-navigation"
 import { useViewport } from "@/hooks/use-viewport"
 import type { CommentSortOrder } from "@/lib/local-storage"
 import { getAnalyticsEnabled, getCommentSortOrder, setCommentSortOrder } from "@/lib/local-storage"
+import { isMoleculePresentation } from "@/lib/molecule-presentation"
+import { safeCapture } from "@/lib/posthog-safe"
 import type { Bead, Comment } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -135,6 +135,7 @@ export const BeadDetailPanel = forwardRef<BeadDetailPanelHandle, BeadDetailPanel
     // Molecule DAG view state
     const [moleculeViewEnabled, setMoleculeViewEnabled] = useState(false)
     const [activeDetailTab, setActiveDetailTab] = useState<"details" | "molecule">("details")
+    const beadId = bead?.id
     const isMolecule = bead ? isMoleculePresentation(bead) : false
 
     useEffect(() => {
@@ -157,8 +158,9 @@ export const BeadDetailPanel = forwardRef<BeadDetailPanelHandle, BeadDetailPanel
     }, [])
 
     useEffect(() => {
+      void beadId
       setActiveDetailTab("details")
-    }, [bead?.id])
+    }, [beadId])
 
     // Spec viewer state
     const [isEditingSpecId, setIsEditingSpecId] = useState(false)
@@ -207,26 +209,24 @@ export const BeadDetailPanel = forwardRef<BeadDetailPanelHandle, BeadDetailPanel
 
     // Reset UI state on bead change
     useEffect(() => {
-      if (bead) {
+      if (beadId) {
         setIsEditingSpecId(false)
         setEditSpecIdValue("")
         setIsEditingDesign(false)
         setEditDesignValue("")
         setIsExpandedView(false)
       }
-      // eslint-disable-next-line react-hooks/exhaustive-deps -- only reset UI state on bead identity change, not every field update
-    }, [bead?.id])
+    }, [beadId])
 
     // Fire app_issue_viewed once per bead
     const viewedBeadIdRef = useRef<string | null>(null)
     useEffect(() => {
-      if (!bead || bead.id === viewedBeadIdRef.current) return
-      viewedBeadIdRef.current = bead.id
+      if (!beadId || beadId === viewedBeadIdRef.current) return
+      viewedBeadIdRef.current = beadId
       if (getAnalyticsEnabled()) {
         safeCapture("app_issue_viewed", { source: "panel" })
       }
-      // eslint-disable-next-line react-hooks/exhaustive-deps -- only fire analytics on bead identity change
-    }, [bead?.id])
+    }, [beadId])
 
     const handleKeyDown = useCallback(
       (e: React.KeyboardEvent) => {

@@ -29,14 +29,28 @@ export function parseFingerprint(fingerprint: string): FingerprintParts | null {
   }
 }
 
-export function getCachedEpics(fingerprint: string, dbPath: string, includeSystem = false): Epic[] | null {
-  if (fingerprint === cachedFingerprint && dbPath === cachedDbPath && includeSystem === cachedIncludeSystem && cachedResult) {
+export function getCachedEpics(
+  fingerprint: string,
+  dbPath: string,
+  includeSystem = false,
+): Epic[] | null {
+  if (
+    fingerprint === cachedFingerprint &&
+    dbPath === cachedDbPath &&
+    includeSystem === cachedIncludeSystem &&
+    cachedResult
+  ) {
     return cachedResult
   }
   return null
 }
 
-export function setCachedEpics(fingerprint: string, dbPath: string, epics: Epic[], includeSystem = false): void {
+export function setCachedEpics(
+  fingerprint: string,
+  dbPath: string,
+  epics: Epic[],
+  includeSystem = false,
+): void {
   cachedFingerprint = fingerprint
   cachedDbPath = dbPath
   cachedIncludeSystem = includeSystem
@@ -113,7 +127,7 @@ export function getCachedBeadDetail(id: string): Bead | null {
   if (!entry) return null
   // Validate against current epic tree state
   const treeBead = findBeadInCachedTree(id)
-  if (!treeBead || !treeBead.updatedAt) return null
+  if (!treeBead?.updatedAt) return null
   const treeUpdatedAt = treeBead.updatedAt.toISOString()
   const treeCommentCount = treeBead.commentCount ?? 0
   if (entry.updatedAt === treeUpdatedAt && entry.commentCount === treeCommentCount) {

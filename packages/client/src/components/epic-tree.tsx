@@ -62,7 +62,7 @@ interface EpicTreeProps {
 }
 
 // Depth-based left border colors
-import { countBeadAndSubtasks, getAggregatedCounts } from "@/lib/epic-progress"
+import { getAggregatedCounts } from "@/lib/epic-progress"
 
 const depthBorderColors = [
   "border-l-emerald-500",
