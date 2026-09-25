@@ -106,7 +106,7 @@ async function buildEpicHierarchy(options: BdOptions = {}): Promise<Epic[]> {
   // Step 1: Get ALL beads in one call (includes parent field)
   const allBeads = await listBeads(readOptions)
 
-  const hierarchicalTypes = new Set(["epic", "convoy", "molecule"])
+  const hierarchicalTypes = new Set(["epic", "milestone", "convoy", "molecule"])
   const epicBeads = allBeads.filter((b) => hierarchicalTypes.has(b.issue_type))
   const nonEpicBeads = allBeads.filter((b) => !hierarchicalTypes.has(b.issue_type))
 
@@ -153,7 +153,11 @@ async function buildEpicHierarchy(options: BdOptions = {}): Promise<Epic[]> {
     epicsWithDependents.map((e) => [e.id, e.dependents || []]),
   )
 
+  const epicMap = new Map<string, Epic>()
+
   function buildBeadWithChildren(bdBead: BdBead, depth: number = 0): Bead {
+    const nestedEpic = epicMap.get(bdBead.id)
+    if (nestedEpic) return nestedEpic
     const baseBead = convertBead(bdBead)
     if (depth >= 5) return baseBead
 
@@ -170,7 +174,6 @@ async function buildEpicHierarchy(options: BdOptions = {}): Promise<Epic[]> {
     }
   }
 
-  const epicMap = new Map<string, Epic>()
   const childEpicIds = new Set<string>()
 
   for (const bdEpic of epicsWithDependents) {
@@ -215,7 +218,11 @@ async function buildEpicHierarchy(options: BdOptions = {}): Promise<Epic[]> {
     }
   }
 
-  const topLevelEpics = Array.from(epicMap.values()).filter((e) => !childEpicIds.has(e.id))
+  const topLevelEpics = Array.from(epicMap.values()).filter((e) => {
+    if (childEpicIds.has(e.id)) return false
+    const parent = e.parentId ? beadById.get(e.parentId) : undefined
+    return !parent || hierarchicalTypes.has(parent.issue_type)
+  })
 
   const beadsUnderEpics = new Set<string>()
   for (const bdEpic of epicsWithDependents) {
@@ -277,12 +284,14 @@ async function buildEpicHierarchy(options: BdOptions = {}): Promise<Epic[]> {
       epic.childEpics = []
     }
     const childBelowNonEpic = belowNonEpic || !hierarchicalTypes.has(bead.type)
-    bead.children?.forEach((child) => normalizeNestedEpics(child, childBelowNonEpic))
+    for (const child of bead.children ?? []) normalizeNestedEpics(child, childBelowNonEpic)
     if ("childEpics" in bead) {
-      (bead as Epic).childEpics?.forEach((child) => normalizeNestedEpics(child, childBelowNonEpic))
+      for (const child of (bead as Epic).childEpics ?? []) {
+        normalizeNestedEpics(child, childBelowNonEpic)
+      }
     }
   }
-  topLevelEpics.forEach((epic) => normalizeNestedEpics(epic))
+  for (const epic of topLevelEpics) normalizeNestedEpics(epic)
 
   // Attach rigName from routes.jsonl (Gastown multi-rig workspaces)
   const dbPath = options.db || process.cwd()
