@@ -1,9 +1,10 @@
 import { afterEach, expect, test } from "bun:test"
+import { realpathSync } from "node:fs"
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { resetPathCaches } from "../lib/bd-paths"
-import { ServeManager } from "../lib/serve-manager"
+import { resolveServeBinary, ServeManager } from "../lib/serve-manager"
 import { resolveWorkspaceTarget } from "../lib/workspace-resolver"
 
 const dirs: string[] = []
@@ -13,6 +14,18 @@ afterEach(async () => {
   delete process.env.BEADBOX_REGISTRY_PATH
   resetPathCaches()
   await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })))
+})
+
+test("npm bd shim resolves to its native child for owned serve lifecycle", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "beadbox-serve-binary-test-"))
+  dirs.push(dir)
+  const shim = join(dir, "bd.js")
+  const native = join(dir, process.platform === "win32" ? "bd.exe" : "bd")
+  await writeFile(shim, "#!/usr/bin/env node\n")
+  await writeFile(native, "native")
+  expect(resolveServeBinary(shim)).toBe(realpathSync(native))
+  await rm(native)
+  expect(() => resolveServeBinary(shim)).toThrow("bd native executable unavailable")
 })
 
 test("concurrent first reads share an owned child and stop sends TERM", async () => {

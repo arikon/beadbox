@@ -1,9 +1,9 @@
 import { type ChildProcess, spawn } from "node:child_process"
 import { randomBytes } from "node:crypto"
-import { existsSync } from "node:fs"
+import { existsSync, realpathSync } from "node:fs"
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { basename, dirname, join } from "node:path"
 import { resolveBdPath } from "./bd-paths"
 import { buildServerEnv, getWorkspacePassword } from "./credential-provider"
 import { requestServeJson, type ServeHandle, ServeHttpError, ServeHttpSession } from "./serve-http"
@@ -31,6 +31,21 @@ const START_LINE = /^bd serve: listening on (http:\/\/127\.0\.0\.1:([1-9]\d{0,4}
 
 function key(target: WorkspaceTarget): string {
   return `${target.id}:${target.generation}`
+}
+
+// The npm bd.js shim spawns the native bd process. Signalling the shim can
+// orphan a listening server, so own the native process directly when present.
+export function resolveServeBinary(binary: string): string {
+  let resolved: string
+  try {
+    resolved = realpathSync(binary)
+  } catch {
+    return binary
+  }
+  if (basename(resolved) !== "bd.js") return binary
+  const native = join(dirname(resolved), process.platform === "win32" ? "bd.exe" : "bd")
+  if (!existsSync(native)) throw new ServeHttpError("startup", "bd native executable unavailable")
+  return native
 }
 
 async function waitUntil(deadline: number, settled: Promise<void>): Promise<void> {
@@ -177,7 +192,7 @@ export class ServeManager {
   }
 
   private async start(target: WorkspaceTarget): Promise<OwnedProcess> {
-    const binary = resolveBdPath()
+    const binary = resolveServeBinary(resolveBdPath())
     if (!binary || (binary.includes("/") && !existsSync(binary)))
       throw new ServeHttpError("startup", "bd binary unavailable")
     const runtimeDir = await mkdtemp(join(tmpdir(), "beadbox-serve-"))
@@ -252,6 +267,7 @@ export class ServeManager {
       owned.session = await ServeHttpSession.connect(handle)
       if (this.closed) throw new ServeHttpError("startup", "bd serve manager is shutting down")
       this.processes.set(target.id, owned)
+      console.debug(`[bd-serve] ready workspace=${target.id} pid=${child.pid}`)
       child.once("exit", () => {
         if (this.processes.get(target.id) === owned) this.processes.delete(target.id)
         if (!owned.draining) this.noteFailure(target.id)

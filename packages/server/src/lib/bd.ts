@@ -238,10 +238,17 @@ async function readViaServe<T>(
     if (compareVersions(await workspaceTransition.bdVersion(), "1.3.0") < 0) return cli(scoped)
     try {
       const session = await serveManager.getSession(target)
-      if (!session.hasCapability(capability)) return cli(scoped)
-      return await http(target)
+      if (!session.hasCapability(capability)) {
+        console.debug(`[bd-serve] CLI fallback workspace=${target.id} capability=${capability} reason=unsupported`)
+        return cli(scoped)
+      }
+      const result = await http(target)
+      console.debug(`[bd-serve] HTTP read workspace=${target.id} capability=${capability}`)
+      return result
     } catch (error) {
       if (!mayFallbackToCli(error, target)) throw error
+      const reason = error instanceof ServeHttpError ? error.kind : "unknown"
+      console.debug(`[bd-serve] CLI fallback workspace=${target.id} capability=${capability} reason=${reason}`)
       return cli(scoped)
     }
   })

@@ -268,10 +268,17 @@ function startEmbeddedLoop(state: DetectorState): void {
 
 }
 
-// Bun includes this worker in compiled sidecars as a second entrypoint.
+// Bun includes this worker in compiled sidecars as a second entrypoint. In a
+// standalone executable, import.meta.url points at the main bundle root even
+// here, so the worker path must include lib/. In source mode it is relative to
+// this module instead.
 // Its own event loop continues polling while the main kkrpc stdin reader is idle.
 export function _startServerPollWorker(state: DetectorState, id: string): void {
-  const worker = new Worker(new URL("./server-poll-worker.ts", import.meta.url).href)
+  const standalone = (Bun as typeof Bun & { isStandaloneExecutable: boolean }).isStandaloneExecutable
+  const workerPath = standalone
+    ? new URL("./lib/server-poll-worker.ts", import.meta.url).href
+    : new URL("./server-poll-worker.ts", import.meta.url).href
+  const worker = new Worker(workerPath)
   state.pollWorker = worker
   let failed = false
   worker.onerror = (err) => {
