@@ -176,13 +176,7 @@ export class ServeManager {
     if (stopping) await stopping
     if (this.closed) throw new ServeHttpError("startup", "bd serve manager is shutting down")
     const startupKey = key(target)
-    const staleStarts = [...this.starts.entries()]
-      .filter(([otherKey]) => otherKey.startsWith(`${target.id}:`) && otherKey !== startupKey)
-      .map(([, pending]) => pending)
-    if (staleStarts.length) {
-      await Promise.allSettled(staleStarts)
-      await this.stop(target.id)
-    }
+    await this.stopStaleStarts(target, startupKey)
     const existing = this.processes.get(target.id)
     if (
       existing &&
@@ -194,11 +188,7 @@ export class ServeManager {
     }
     let owned = this.processes.get(target.id)
     if (!owned) {
-      const backoff = this.restartBackoff.get(target.id)
-      if (backoff && backoff.retryAt > Date.now()) {
-        await new Promise((done) => setTimeout(done, backoff.retryAt - Date.now()))
-        if (this.closed) throw new ServeHttpError("startup", "bd serve manager is shutting down")
-      }
+      await this.waitForRestartBackoff(target.id)
       let pending = this.starts.get(startupKey)
       if (!pending) {
         pending = this.start(target)
@@ -216,6 +206,24 @@ export class ServeManager {
     }
     owned.lastUsed = Date.now()
     return owned.session
+  }
+
+  private async stopStaleStarts(target: WorkspaceTarget, startupKey: string): Promise<void> {
+    const staleStarts = [...this.starts.entries()]
+      .filter(([otherKey]) => otherKey.startsWith(`${target.id}:`) && otherKey !== startupKey)
+      .map(([, pending]) => pending)
+    if (staleStarts.length) {
+      await Promise.allSettled(staleStarts)
+      await this.stop(target.id)
+    }
+  }
+
+  private async waitForRestartBackoff(id: string): Promise<void> {
+    const backoff = this.restartBackoff.get(id)
+    if (backoff && backoff.retryAt > Date.now()) {
+      await new Promise((done) => setTimeout(done, backoff.retryAt - Date.now()))
+      if (this.closed) throw new ServeHttpError("startup", "bd serve manager is shutting down")
+    }
   }
 
   private async start(target: WorkspaceTarget): Promise<OwnedProcess> {

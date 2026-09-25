@@ -57,8 +57,11 @@ export function resolvePort(workspace: RegistryEntry): number | null {
     return workspace.server?.port ?? null
   }
 
-  // Local workspace: workspace.local.path IS the .beads/ directory
-  const beadsDir = workspace.local.path
+  return resolveLocalPort(workspace.local.path) ?? workspace.server?.port ?? null
+}
+
+function resolveLocalPort(beadsDir: string): number | null {
+  // Local workspace: beadsDir IS the .beads/ directory
   const portFile = join(beadsDir, "dolt-server.port")
   try {
     const portStr = readFileSync(portFile, "utf-8").trim()
@@ -81,8 +84,7 @@ export function resolvePort(workspace: RegistryEntry): number | null {
     // metadata.json missing or unparseable
   }
 
-  // Last resort: stale registry port
-  return workspace.server?.port ?? null
+  return null
 }
 
 const BD_VERSION_RE = /(\d+\.\d+\.\d+)/

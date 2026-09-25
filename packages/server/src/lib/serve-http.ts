@@ -21,11 +21,17 @@ export class ServeHttpError extends Error {
 }
 
 type JsonObject = Record<string, unknown>
+type ServeContext = JsonObject & { capabilities: string[]; project_id: string }
 export type Issue = JsonObject & { id: string }
 export type IssueDetails = Issue & {
   comments?: JsonObject[]
   dependencies?: JsonObject[]
   dependents?: JsonObject[]
+}
+type GetIssueOptions = {
+  includeComments?: boolean
+  includeDependents?: boolean
+  briefDeps?: boolean
 }
 export type ListIssuesQuery = Record<
   string,
@@ -60,6 +66,131 @@ function samePath(actual: unknown, expected: string): boolean {
   return canonical(actual) === canonical(expected)
 }
 
+function validateContext(context: unknown): ServeContext {
+  if (!object(context)) throw new ServeHttpError("contract", "Invalid bd serve context")
+  if (
+    context.api_version !== "v0" ||
+    typeof context.bd_version !== "string" ||
+    !versionAtLeast13(context.bd_version)
+  ) {
+    throw new ServeHttpError("contract", "Unsupported bd serve API or version")
+  }
+  if (
+    !Array.isArray(context.capabilities) ||
+    !context.capabilities.every((v) => typeof v === "string") ||
+    typeof context.project_id !== "string" ||
+    typeof context.database !== "string"
+  ) {
+    throw new ServeHttpError("contract", "Incomplete bd serve context")
+  }
+  return context as ServeContext
+}
+
+function validateContextIdentity(context: JsonObject, target: WorkspaceTarget): void {
+  const expectedDatabase = target.serverConnection?.database
+  if (
+    context.backend !== "dolt" ||
+    context.dolt_mode !== "server" ||
+    (expectedDatabase && context.database !== expectedDatabase) ||
+    (target.localBeadsDir && !samePath(context.beads_dir, target.localBeadsDir))
+  ) {
+    throw new ServeHttpError("identity", "bd serve workspace identity mismatch")
+  }
+  // repo_root is optional on the wire; when present, it must contain the known .beads directory.
+  if (
+    target.localBeadsDir &&
+    typeof context.repo_root === "string" &&
+    !samePath(context.repo_root, resolve(target.localBeadsDir, ".."))
+  ) {
+    throw new ServeHttpError("identity", "bd serve repository identity mismatch")
+  }
+}
+
+function issuesPage(value: unknown): { items: Issue[]; has_more: boolean; next_cursor?: string } {
+  if (
+    !object(value) ||
+    !Array.isArray(value.items) ||
+    typeof value.has_more !== "boolean" ||
+    !value.items.every((item) => object(item) && typeof item.id === "string")
+  ) {
+    throw new ServeHttpError("contract", "Invalid bd serve issues page")
+  }
+  return value as { items: Issue[]; has_more: boolean; next_cursor?: string }
+}
+
+function validateFullIssueShape(detail: IssueDetails): void {
+  for (const field of ["comments", "dependencies", "dependents"] as const) {
+    const value = detail[field]
+    if (value !== undefined && value !== null && !Array.isArray(value))
+      throw new ServeHttpError("contract", `Invalid bd serve ${field}`)
+  }
+  if (
+    typeof detail.title !== "string" ||
+    typeof detail.status !== "string" ||
+    typeof detail.issue_type !== "string" ||
+    typeof detail.priority !== "number"
+  )
+    throw new ServeHttpError("contract", "Invalid bd serve issue fields")
+  validateFullIssueComments(detail)
+  validateFullIssueNeighbors(detail)
+}
+
+function validateFullIssueComments(detail: IssueDetails): void {
+  if (
+    !((detail.comments ?? []) as unknown[]).every(
+      (comment) =>
+        object(comment) &&
+        typeof comment.id === "string" &&
+        typeof comment.author === "string" &&
+        typeof comment.text === "string" &&
+        typeof comment.created_at === "string",
+    )
+  )
+    throw new ServeHttpError("contract", "Invalid bd serve comments")
+}
+
+function validateFullIssueNeighbors(detail: IssueDetails): void {
+  for (const field of ["dependencies", "dependents"] as const) {
+    if (
+      !((detail[field] ?? []) as unknown[]).every(
+        (neighbor) =>
+          object(neighbor) &&
+          typeof neighbor.id === "string" &&
+          typeof neighbor.title === "string" &&
+          typeof neighbor.status === "string" &&
+          typeof neighbor.dependency_type === "string",
+      )
+    )
+      throw new ServeHttpError("contract", `Invalid bd serve ${field}`)
+  }
+}
+
+function validateFullIssuePresence(detail: IssueDetails): void {
+  if (detail.comments_omitted === true)
+    throw new ServeHttpError("contract", "bd serve omitted requested comments")
+  if (
+    typeof detail.comment_count === "number" &&
+    detail.comment_count > 0 &&
+    !Array.isArray(detail.comments)
+  )
+    throw new ServeHttpError("contract", "bd serve omitted requested comments")
+  if (
+    typeof detail.dependent_count === "number" &&
+    detail.dependent_count > 0 &&
+    !Array.isArray(detail.dependents)
+  )
+    throw new ServeHttpError("contract", "bd serve omitted requested dependents")
+  // An explicit null can represent an empty hydrated neighbor list even
+  // when dangling external edges contribute to dependency_count. Omission
+  // with a positive count is a truncated response instead.
+  if (
+    typeof detail.dependency_count === "number" &&
+    detail.dependency_count > 0 &&
+    detail.dependencies === undefined
+  )
+    throw new ServeHttpError("contract", "bd serve omitted dependencies")
+}
+
 export class ServeHttpSession {
   readonly capabilities: ReadonlySet<string>
   readonly projectId: string
@@ -73,46 +204,9 @@ export class ServeHttpSession {
   }
 
   static async connect(handle: ServeHandle): Promise<ServeHttpSession> {
-    const context = await handle.request<unknown>("/v0/beads/context")
-    if (!object(context)) throw new ServeHttpError("contract", "Invalid bd serve context")
-    const target = handle.target
-    if (
-      context.api_version !== "v0" ||
-      typeof context.bd_version !== "string" ||
-      !versionAtLeast13(context.bd_version)
-    ) {
-      throw new ServeHttpError("contract", "Unsupported bd serve API or version")
-    }
-    if (
-      !Array.isArray(context.capabilities) ||
-      !context.capabilities.every((v) => typeof v === "string") ||
-      typeof context.project_id !== "string" ||
-      typeof context.database !== "string"
-    ) {
-      throw new ServeHttpError("contract", "Incomplete bd serve context")
-    }
-    const expectedDatabase = target.serverConnection?.database
-    if (
-      context.backend !== "dolt" ||
-      context.dolt_mode !== "server" ||
-      (expectedDatabase && context.database !== expectedDatabase) ||
-      (target.localBeadsDir && !samePath(context.beads_dir, target.localBeadsDir))
-    ) {
-      throw new ServeHttpError("identity", "bd serve workspace identity mismatch")
-    }
-    // repo_root is optional on the wire; when present, it must contain the known .beads directory.
-    if (
-      target.localBeadsDir &&
-      typeof context.repo_root === "string" &&
-      !samePath(context.repo_root, resolve(target.localBeadsDir, ".."))
-    ) {
-      throw new ServeHttpError("identity", "bd serve repository identity mismatch")
-    }
-    const session = new ServeHttpSession(
-      handle,
-      context.capabilities as string[],
-      context.project_id,
-    )
+    const context = validateContext(await handle.request<unknown>("/v0/beads/context"))
+    validateContextIdentity(context, handle.target)
+    const session = new ServeHttpSession(handle, context.capabilities, context.project_id)
     await session.request("/v0/beads/ready?limit=1")
     return session
   }
@@ -140,16 +234,8 @@ export class ServeHttpSession {
     }
     const items: Issue[] = []
     for (;;) {
-      const page = await this.request<unknown>(`/v0/beads/issues?${params}`)
-      if (
-        !object(page) ||
-        !Array.isArray(page.items) ||
-        typeof page.has_more !== "boolean" ||
-        !page.items.every((item) => object(item) && typeof item.id === "string")
-      ) {
-        throw new ServeHttpError("contract", "Invalid bd serve issues page")
-      }
-      items.push(...(page.items as Issue[]))
+      const page = issuesPage(await this.request<unknown>(`/v0/beads/issues?${params}`))
+      items.push(...page.items)
       if (!page.has_more) return items
       if (query.limit === 0 || typeof page.next_cursor !== "string" || !page.next_cursor) {
         throw new ServeHttpError("contract", "Invalid bd serve pagination")
@@ -158,18 +244,16 @@ export class ServeHttpSession {
     }
   }
 
-  async getIssue(
-    id: string,
-    options: { includeComments?: boolean; includeDependents?: boolean; briefDeps?: boolean } = {},
-  ): Promise<IssueDetails> {
+  async getIssue(id: string, options?: GetIssueOptions): Promise<IssueDetails> {
     if (!this.hasCapability("issues.get"))
       throw new ServeHttpError("contract", "bd serve lacks issues.get")
     const params = new URLSearchParams()
-    if (options.includeComments) params.set("include_comments", "true")
-    if (options.includeDependents) params.set("include_dependents", "true")
-    if (options.briefDeps) params.set("brief_deps", "true")
+    if (options?.includeComments) params.set("include_comments", "true")
+    if (options?.includeDependents) params.set("include_dependents", "true")
+    if (options?.briefDeps) params.set("brief_deps", "true")
+    const suffix = params.size ? `?${params}` : ""
     const detail = await this.request<unknown>(
-      `/v0/beads/issues/${encodeURIComponent(id)}${params.size ? `?${params}` : ""}`,
+      `/v0/beads/issues/${encodeURIComponent(id)}${suffix}`,
     )
     if (!object(detail) || detail.id !== id)
       throw new ServeHttpError("contract", "Invalid bd serve issue detail")
@@ -182,65 +266,8 @@ export class ServeHttpSession {
       includeDependents: true,
       briefDeps: true,
     })
-    for (const field of ["comments", "dependencies", "dependents"] as const) {
-      const value = detail[field]
-      if (value !== undefined && value !== null && !Array.isArray(value))
-        throw new ServeHttpError("contract", `Invalid bd serve ${field}`)
-    }
-    if (
-      typeof detail.title !== "string" ||
-      typeof detail.status !== "string" ||
-      typeof detail.issue_type !== "string" ||
-      typeof detail.priority !== "number"
-    )
-      throw new ServeHttpError("contract", "Invalid bd serve issue fields")
-    if (
-      !((detail.comments ?? []) as unknown[]).every(
-        (comment) =>
-          object(comment) &&
-          typeof comment.id === "string" &&
-          typeof comment.author === "string" &&
-          typeof comment.text === "string" &&
-          typeof comment.created_at === "string",
-      )
-    )
-      throw new ServeHttpError("contract", "Invalid bd serve comments")
-    for (const field of ["dependencies", "dependents"] as const) {
-      if (
-        !((detail[field] ?? []) as unknown[]).every(
-          (neighbor) =>
-            object(neighbor) &&
-            typeof neighbor.id === "string" &&
-            typeof neighbor.title === "string" &&
-            typeof neighbor.status === "string" &&
-            typeof neighbor.dependency_type === "string",
-        )
-      )
-        throw new ServeHttpError("contract", `Invalid bd serve ${field}`)
-    }
-    if (detail.comments_omitted === true)
-      throw new ServeHttpError("contract", "bd serve omitted requested comments")
-    if (
-      typeof detail.comment_count === "number" &&
-      detail.comment_count > 0 &&
-      !Array.isArray(detail.comments)
-    )
-      throw new ServeHttpError("contract", "bd serve omitted requested comments")
-    if (
-      typeof detail.dependent_count === "number" &&
-      detail.dependent_count > 0 &&
-      !Array.isArray(detail.dependents)
-    )
-      throw new ServeHttpError("contract", "bd serve omitted requested dependents")
-    // An explicit null can represent an empty hydrated neighbor list even
-    // when dangling external edges contribute to dependency_count. Omission
-    // with a positive count is a truncated response instead.
-    if (
-      typeof detail.dependency_count === "number" &&
-      detail.dependency_count > 0 &&
-      detail.dependencies === undefined
-    )
-      throw new ServeHttpError("contract", "bd serve omitted dependencies")
+    validateFullIssueShape(detail)
+    validateFullIssuePresence(detail)
     return detail
   }
 
