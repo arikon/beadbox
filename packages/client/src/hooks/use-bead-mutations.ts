@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
 import { trackedAction } from "@/lib/capture-action-failed"
 import { getAnalyticsEnabled, getArchiveHintShown, setArchiveHintShown } from "@/lib/local-storage"
@@ -81,24 +81,6 @@ export function useBeadMutations({ bead, dbPath, onUpdate }: UseBeadMutationsOpt
   // ---------------------------------------------------------------------------
   // Sync from bead prop
   // ---------------------------------------------------------------------------
-  const syncFromBead = useEffectEvent(() => {
-    if (bead) {
-      setTitle(bead.title)
-      setDescription(bead.description)
-      setDesign(bead.design || "")
-      setAcceptanceCriteria(bead.acceptanceCriteria || "")
-      setNotes(bead.notes || "")
-      setType(bead.type)
-      setStatus(bead.status)
-      setPriority(bead.priority)
-      setAssignee(bead.assignee)
-      setSpecId(bead.specId || "")
-      setDueAt(bead.dueAt)
-      setDeferUntil(bead.deferUntil)
-      setEstimatedMinutes(bead.estimatedMinutes)
-      setLabels(bead.labels || [])
-    }
-  })
   const beadSyncKey =
     bead &&
     JSON.stringify([
@@ -119,9 +101,29 @@ export function useBeadMutations({ bead, dbPath, onUpdate }: UseBeadMutationsOpt
       bead.updatedAt,
       bead.labels,
     ])
+  const lastSyncedKeyRef = useRef<string | null>(null)
   useEffect(() => {
-    if (beadSyncKey) syncFromBead()
-  }, [beadSyncKey])
+    if (!bead || !beadSyncKey) {
+      lastSyncedKeyRef.current = null
+      return
+    }
+    if (lastSyncedKeyRef.current === beadSyncKey) return
+    lastSyncedKeyRef.current = beadSyncKey
+    setTitle(bead.title)
+    setDescription(bead.description)
+    setDesign(bead.design || "")
+    setAcceptanceCriteria(bead.acceptanceCriteria || "")
+    setNotes(bead.notes || "")
+    setType(bead.type)
+    setStatus(bead.status)
+    setPriority(bead.priority)
+    setAssignee(bead.assignee)
+    setSpecId(bead.specId || "")
+    setDueAt(bead.dueAt)
+    setDeferUntil(bead.deferUntil)
+    setEstimatedMinutes(bead.estimatedMinutes)
+    setLabels(bead.labels || [])
+  }, [bead, beadSyncKey])
 
   // Reset field states on bead change
   const beadId = bead?.id
