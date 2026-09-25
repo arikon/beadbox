@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test"
 import { realpathSync } from "node:fs"
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { resetPathCaches } from "../lib/bd-paths"
@@ -58,6 +58,7 @@ const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
   return new Response("{}", { status: 404 })
 }})
 console.log("bd serve: listening on http://127.0.0.1:" + server.port)
+console.error("event=request_error request_id=test-503 error=connection reset by peer")
 process.on("SIGTERM", () => { appendFileSync(process.env.BEADBOX_SERVE_TEST_MARKER, "TERM\\n"); server.stop(true); process.exit(0) })
 `,
     { mode: 0o700 },
@@ -65,6 +66,7 @@ process.on("SIGTERM", () => { appendFileSync(process.env.BEADBOX_SERVE_TEST_MARK
   process.env.BD_PATH = executable
   process.env.BEADBOX_SERVE_TEST_MARKER = marker
   process.env.BEADBOX_REGISTRY_PATH = join(dir, "registry.json")
+  await writeFile(join(dir, "config.json"), JSON.stringify({ bdServeStderrLog: true }))
   await writeFile(
     process.env.BEADBOX_REGISTRY_PATH,
     JSON.stringify({
@@ -85,7 +87,8 @@ process.on("SIGTERM", () => { appendFileSync(process.env.BEADBOX_SERVE_TEST_MARK
   )
   resetPathCaches()
   const target = await resolveWorkspaceTarget("a")
-  const manager = new ServeManager()
+  const logDirectory = join(dir, "logs")
+  const manager = new ServeManager(logDirectory)
   try {
     expect(manager.hasReadySession(target)).toBe(false)
     const [a, b] = await Promise.all([manager.getSession(target), manager.getSession(target)])
@@ -102,6 +105,9 @@ process.on("SIGTERM", () => { appendFileSync(process.env.BEADBOX_SERVE_TEST_MARK
     expect(argv).not.toContain(token)
     await manager.stopAll()
     expect((await readFile(marker, "utf8")).trim().split("\n")).toContain("TERM")
+    expect(
+      await readFile(join(logDirectory, `bd-serve-stderr-${process.pid}-a.log`), "utf8"),
+    ).toContain("request_id=test-503")
     await expect(manager.getSession(target)).rejects.toMatchObject({ kind: "startup" })
   } finally {
     await manager.stopAll()

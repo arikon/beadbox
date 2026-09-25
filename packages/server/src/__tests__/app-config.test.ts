@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { bdServeReadsEnabled, getAppConfigPath } from "../lib/app-config"
+import { bdServeReadsEnabled, bdServeStderrLogEnabled, getAppConfigPath } from "../lib/app-config"
 
 const previousRegistry = process.env.BEADBOX_REGISTRY_PATH
 const previousOverride = process.env.BEADBOX_BD_SERVE_READS
@@ -47,4 +47,14 @@ test("explicit environment override takes precedence over app config", async () 
   expect(await bdServeReadsEnabled()).toBe(false)
   process.env.BEADBOX_BD_SERVE_READS = "1"
   expect(await bdServeReadsEnabled()).toBe(true)
+})
+
+test("bd serve stderr diagnostics require an explicit boolean setting", async () => {
+  expect(await bdServeStderrLogEnabled()).toBe(false)
+  await writeFile(getAppConfigPath(), JSON.stringify({ bdServeReads: true }))
+  expect(await bdServeStderrLogEnabled()).toBe(false)
+  await writeFile(getAppConfigPath(), JSON.stringify({ bdServeStderrLog: "true" }))
+  expect(await bdServeStderrLogEnabled()).toBe(false)
+  await writeFile(getAppConfigPath(), JSON.stringify({ bdServeStderrLog: true }))
+  expect(await bdServeStderrLogEnabled()).toBe(true)
 })

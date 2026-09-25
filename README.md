@@ -92,6 +92,8 @@ An opt-in read pilot uses Beads 1.3.0 or newer to start one authenticated `bd se
 
 The setting is read on each operation; absent or invalid values leave the pilot off. `BEADBOX_BD_SERVE_READS=1` or `=0` overrides the file when explicitly set. Each child listens only on an ephemeral loopback port and is stopped with the sidecar; embedded workspaces remain on the CLI. Keep the pilot disabled until the performance and parity checks in the [workspace serve design](docs/design/bd-serve-per-workspace.md) have been run for the target environment.
 
+For diagnosing `bd serve` failures, add `"bdServeStderrLog": true` to the same config file. This opt-in setting is checked when a `bd serve` child starts. Its stderr goes to a separate owner-only file under `~/Library/Logs/Beadbox/bd-serve/` on macOS (or the sidecar log directory on other platforms), never to the general sidecar log. Each workspace file rotates at 2 MiB with two backups; logs from stopped sidecar processes are pruned to the two most recent process runs. Beadbox masks the configured host, port, database, user, password, HTTP token, and common credential fields before writing. An existing child needs to stop and start before a changed setting takes effect.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Contributions are accepted under the MIT license — no CLA.

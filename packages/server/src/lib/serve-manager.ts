@@ -4,9 +4,11 @@ import { existsSync, realpathSync } from "node:fs"
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { basename, dirname, join } from "node:path"
+import { bdServeStderrLogEnabled } from "./app-config"
 import { resolveBdPath } from "./bd-paths"
 import { buildServerEnv, getWorkspacePassword } from "./credential-provider"
 import { requestServeJson, type ServeHandle, ServeHttpError, ServeHttpSession } from "./serve-http"
+import { ServeStderrLog } from "./serve-stderr-log"
 import { resolveWorkspaceTarget, type WorkspaceTarget } from "./workspace-resolver"
 import { workspaceTransition } from "./workspace-transition"
 
@@ -31,6 +33,11 @@ const START_LINE = /^bd serve: listening on (http:\/\/127\.0\.0\.1:([1-9]\d{0,4}
 
 function key(target: WorkspaceTarget): string {
   return `${target.id}:${target.generation}`
+}
+
+function diagnosticErrorCode(error: unknown): string {
+  const code = (error as NodeJS.ErrnoException | null)?.code
+  return typeof code === "string" && /^[A-Z0-9_]+$/.test(code) ? code : "unknown"
 }
 
 // The npm bd.js shim spawns the native bd process. Signalling the shim can
@@ -128,6 +135,8 @@ export class ServeManager {
   private closed = false
   private idleTimer: ReturnType<typeof setInterval> | null = null
 
+  constructor(private readonly stderrLogDirectory?: string) {}
+
   hasReadySession(target: WorkspaceTarget): boolean {
     const owned = this.processes.get(target.id)
     return !!(
@@ -217,6 +226,7 @@ export class ServeManager {
     const token = randomBytes(32).toString("base64url")
     const tokenFile = join(runtimeDir, "token")
     let child: ChildProcess | null = null
+    let stderrLog: ServeStderrLog | null = null
     try {
       await chmod(runtimeDir, 0o700)
       await writeFile(tokenFile, `${token}\n`, { mode: 0o600, flag: "wx" })
@@ -229,6 +239,7 @@ export class ServeManager {
         BEADS_DOLT_SERVER_MODE: "1",
         BEADS_DOLT_AUTO_START: "0",
       }
+      const stderrLogEnabled = await bdServeStderrLogEnabled()
       child = spawn(
         binary,
         [
@@ -246,8 +257,48 @@ export class ServeManager {
           stdio: ["ignore", "pipe", "pipe"],
         },
       )
-      // stderr is intentionally bounded and discarded here; never copy it to kkrpc stdout.
-      child.stderr?.resume()
+      if (stderrLogEnabled) {
+        try {
+          stderrLog = new ServeStderrLog({
+            workspaceId: target.id,
+            connection,
+            password,
+            token,
+            directory: this.stderrLogDirectory,
+          })
+          console.debug(`[bd-serve] stderr diagnostics enabled path=${stderrLog.path}`)
+        } catch (error) {
+          console.warn(
+            `[bd-serve] stderr diagnostics unavailable workspace=${target.id} code=${diagnosticErrorCode(error)}`,
+          )
+        }
+      }
+      if (stderrLog) {
+        const log = stderrLog
+        let failed = false
+        child.stderr?.on("data", (chunk: Buffer) => {
+          if (failed) return
+          try {
+            log.write(chunk)
+          } catch (error) {
+            failed = true
+            console.warn(
+              `[bd-serve] stderr diagnostics write failed workspace=${target.id} code=${diagnosticErrorCode(error)}`,
+            )
+          }
+        })
+        const closeLog = () => {
+          try {
+            log.close()
+          } catch {
+            // Diagnostics must not affect the serve process.
+          }
+        }
+        child.stderr?.once("end", closeLog)
+        child.once("close", closeLog)
+      } else {
+        child.stderr?.resume()
+      }
       const address = await waitForAddress(child)
       const owned: OwnedProcess = {
         target,
@@ -355,6 +406,10 @@ export class ServeManager {
 
   private async stopOwned(id: string, owned: OwnedProcess): Promise<void> {
     const deadline = Date.now() + DRAIN_MS
+    const closed =
+      owned.child.exitCode === null
+        ? new Promise<void>((done) => owned.child.once("close", () => done()))
+        : null
     owned.draining = true
     this.processes.delete(id)
     if (owned.inFlight) {
@@ -366,6 +421,7 @@ export class ServeManager {
       await waitUntil(deadline, exited)
       if (owned.child.exitCode === null) owned.child.kill("SIGKILL")
     }
+    if (closed) await waitUntil(deadline, closed)
     await rm(owned.runtimeDir, { recursive: true, force: true })
   }
 
