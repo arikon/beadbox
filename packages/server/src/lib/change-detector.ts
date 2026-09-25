@@ -275,7 +275,7 @@ function bdServerPoll(dbPath: string): Promise<string> {
     Object.assign(env, buildServerEnv(server, password))
     env.BEADS_DOLT_AUTO_START = "0"
     env.BEADS_DOLT_SERVER_MODE = "1"
-    args = ["sql", SERVER_POLL_SQL, "--json", "--quiet"]
+    args = ["sql", SERVER_POLL_SQL, "--json", "--quiet", "--readonly"]
     if (!dbPath.startsWith("server://")) {
       args.push("--db", normalizeDbPath(dbPath))
       cwd = projectRootFromDb(dbPath)
@@ -286,7 +286,7 @@ function bdServerPoll(dbPath: string): Promise<string> {
     const wsPath = projectRootFromDb(dbPath)
     const password = wsPath ? getWorkspacePassword(wsPath) : undefined
     if (password) env.BEADS_DOLT_PASSWORD = password
-    args = ["sql", SERVER_POLL_SQL, "--db", normalizeDbPath(dbPath), "--json", "--quiet"]
+    args = ["sql", SERVER_POLL_SQL, "--db", normalizeDbPath(dbPath), "--json", "--quiet", "--readonly"]
     cwd = wsPath ?? undefined
   }
 
@@ -633,7 +633,7 @@ BD="$3"
 LAST=""
 ERRS=0
 while true; do
-  RESULT=$("$BD" sql '${POLL_SQL}' --db "$DBPATH" --json --quiet 2>/dev/null)
+  RESULT=$("$BD" sql '${POLL_SQL}' --db "$DBPATH" --json --quiet --readonly 2>/dev/null)
   RC=$?
   if [ $RC -ne 0 ]; then
     ERRS=$((ERRS + 1))

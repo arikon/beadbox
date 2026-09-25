@@ -1284,7 +1284,7 @@ export async function getDataFingerprint(options: BdOptions = {}): Promise<strin
   }
   const sql =
     "SELECT HASHOF('HEAD') as h, (SELECT MAX(updated_at) FROM issues) as i, (SELECT COUNT(*) FROM comments) as c"
-  const rows = await bdExec<Array<Record<string, string>>>(["sql", sql], options)
+  const rows = await bdExec<Array<Record<string, string>>>(["sql", sql, "--readonly"], options)
   return JSON.stringify(rows)
 }
 
@@ -1308,7 +1308,7 @@ export async function getChangedBeadIds(since: string, options: BdOptions = {}):
     return rows.map((r) => r.id)
   }
   const sql = `SELECT id FROM issues WHERE updated_at > '${since}'`
-  const rows = await bdExec<Array<{ id: string }>>(["sql", sql], options)
+  const rows = await bdExec<Array<{ id: string }>>(["sql", sql, "--readonly"], options)
   return rows.map((r) => r.id)
 }
 
@@ -1325,7 +1325,7 @@ export async function getAllBlocksDependencies(
     const sql = `SELECT issue_id, depends_on_issue_id AS depends_on_id FROM dependencies WHERE type = 'blocks'`
     const rows = isServerOnlyWithoutScaffold(options.db)
       ? await serverSqlQuery<{ issue_id: string; depends_on_id: string }>(sql, options)
-      : await bdExec<Array<{ issue_id: string; depends_on_id: string }>>(["sql", sql], options)
+      : await bdExec<Array<{ issue_id: string; depends_on_id: string }>>(["sql", sql, "--readonly"], options)
     if (!rows || rows.length === 0) return new Map()
 
     const map = new Map<string, string[]>()
