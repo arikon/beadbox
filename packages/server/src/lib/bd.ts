@@ -20,7 +20,6 @@ import { recordFlockContention } from "./flock-contention-tracker"
 import type {
   BeadPriority,
   BeadStatus,
-  BeadType,
   CookedFormula,
   FormulaDetail,
   FormulaSummary,
@@ -178,6 +177,7 @@ export interface BdOptions {
   cwd?: string // Working directory
   env?: Record<string, string> // Extra environment variables
   parallel?: boolean // Bypass per-db lock (safe for read-only calls in server mode)
+  includeSystem?: boolean // Include gates, infrastructure, and template issues in lists
 }
 
 export interface BdBead {
@@ -187,21 +187,7 @@ export interface BdBead {
   design?: string
   status: "open" | "in_progress" | "ready_for_qa" | "ready_to_ship" | "closed" | "tombstone"
   priority: number // 0-4 (0=critical, 4=low)
-  issue_type:
-    | "bug"
-    | "feature"
-    | "task"
-    | "epic"
-    | "chore"
-    | "message"
-    | "gate"
-    | "merge-request"
-    | "molecule"
-    | "agent"
-    | "role"
-    | "rig"
-    | "convoy"
-    | "event"
+  issue_type: string
   assignee?: string
   owner?: string
   created_by?: string
@@ -846,7 +832,37 @@ export async function deleteBead(id: string, options: BdOptions = {}): Promise<v
 export async function listBeads(options: BdOptions = {}): Promise<BdBead[]> {
   const args = ["list", "--status", "all", "--limit", "0"]
   args.push("--flat")
-  return bdExec<BdBead[]>(args, options)
+  if (!options.includeSystem) return bdExec<BdBead[]>(args, options)
+
+  // Full view must not silently omit a category on older bd releases.
+  const flags = ["--include-gates", "--include-infra", "--include-templates"]
+  try {
+    return await bdExec<BdBead[]>([...args, ...flags], options)
+  } catch (error) {
+    const message = `${(error as { stderr?: string }).stderr ?? ""} ${String(error)}`
+    const unsupported = message.match(/unknown flag:\s*['"]?(--include-(?:gates|infra|templates))/i)?.[1]
+    if (unsupported) {
+      throw new Error(`The installed bd does not support ${unsupported}; upgrade bd to use All issues view`, { cause: error })
+    }
+    throw error
+  }
+}
+
+interface BdTypesResult {
+  core_types?: Array<string | { name?: string }>
+  custom_types?: Array<string | { name?: string }>
+}
+
+export function parseAvailableTypes(value: BdTypesResult): string[] {
+  const names = [...(value.core_types ?? []), ...(value.custom_types ?? [])]
+    .map((entry) => (typeof entry === "string" ? entry : entry?.name))
+    .filter((name): name is string => typeof name === "string" && name.length > 0)
+  return [...new Set(names)]
+}
+
+export async function getAvailableTypes(options: BdOptions = {}): Promise<string[]> {
+  const result = await bdExec<BdTypesResult>(["types"], options)
+  return parseAvailableTypes(result)
 }
 
 // Map bd priority number to our priority type.
@@ -916,31 +932,9 @@ export async function updateParent(
   await bdExecRaw(args, options)
 }
 
-// Map bd issue_type to our BeadType.
-//
-// bb-fe03.4: lookup table replaces a 13-case switch (CCN 16 → 2). The
-// keys are the lowercased bd type names; case-insensitive lookup happens
-// via .toLowerCase() at call time. Unknown types default to "task".
-const BEAD_TYPE_BY_NAME: Readonly<Record<string, import("./types").BeadType>> = Object.freeze({
-  bug: "bug",
-  feature: "feature",
-  epic: "epic",
-  chore: "chore",
-  message: "message",
-  gate: "gate",
-  "merge-request": "merge-request",
-  molecule: "molecule",
-  agent: "agent",
-  role: "role",
-  rig: "rig",
-  convoy: "convoy",
-  event: "event",
-  task: "task",
-})
-
 export function mapType(type?: string): import("./types").BeadType {
-  if (!type) return "task"
-  return BEAD_TYPE_BY_NAME[type.toLowerCase()] ?? "task"
+  if (!type?.trim()) throw new Error("bd returned an issue without issue_type")
+  return type
 }
 
 // Dependency types returned by bd dep list
@@ -1478,7 +1472,7 @@ export async function getMoleculeStructure(
       id: nid,
       title: b?.title ?? nid,
       status: (b?.status ?? "open") as BeadStatus,
-      type: mapType(b?.issue_type) as BeadType,
+      type: b ? mapType(b.issue_type) : "unknown",
       gateType: b?.issue_type === "gate" ? (b.metadata?.gate_type ?? "human") : undefined,
     }
   })

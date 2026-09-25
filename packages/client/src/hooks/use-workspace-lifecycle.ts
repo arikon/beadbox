@@ -54,6 +54,18 @@ function recordLoadEpicsPhase(
 // telemetry. Paired with app_workspace_load_succeeded on success, this lets us measure
 // the real load-time distribution instead of conflating "slow but working" with stuck.
 const WORKSPACE_LOAD_TIMEOUT_MS = 15_000
+const systemIssuesKey = (id: string) => `beadbox:system-issues:${id}`
+const treeCacheKey = (id: string | undefined, includeSystem: boolean) =>
+  id ? `${id}:${includeSystem ? "all" : "normal"}` : undefined
+
+function readSystemIssues(id: string | undefined): boolean {
+  if (!id || typeof localStorage === "undefined") return false
+  try {
+    return localStorage.getItem(systemIssuesKey(id)) === "true"
+  } catch {
+    return false
+  }
+}
 
 interface UseWorkspaceLifecycleOpts {
   initialWorkspaces: Workspace[]
@@ -81,7 +93,57 @@ export function useWorkspaceLifecycle(opts: UseWorkspaceLifecycleOpts) {
 
   const [workspaces, setWorkspaces] = useState<Workspace[]>(initialWorkspaces)
   const [currentWorkspace, setCurrentWorkspace] = useState<Workspace | null>(null)
+  const [systemIssuesByWorkspace, setSystemIssuesByWorkspace] = useState<Record<string, boolean>>(
+    {},
+  )
+  const systemIssuesRef = useRef<Record<string, boolean>>({})
+  const modeForWorkspace = (id: string | undefined) =>
+    id ? (systemIssuesRef.current[id] ?? readSystemIssues(id)) : false
+  const includeSystem = currentWorkspace
+    ? (systemIssuesByWorkspace[currentWorkspace.id] ?? modeForWorkspace(currentWorkspace.id))
+    : false
+  const setIncludeSystem = useCallback(
+    (enabled: boolean) => {
+      if (!currentWorkspace) return
+      try {
+        localStorage.setItem(systemIssuesKey(currentWorkspace.id), String(enabled))
+      } catch {
+        // Keep this session's setting even when WebView storage is unavailable.
+      }
+      loadGenRef.current++
+      const cached = sessionEpics.get(treeCacheKey(currentWorkspace.id, enabled))
+      epicsWorkspaceIdRef.current = cached
+        ? (treeCacheKey(currentWorkspace.id, enabled) ?? null)
+        : null
+      setEpics(cached ?? [])
+      hasExistingDataRef.current = !!cached
+      systemIssuesRef.current[currentWorkspace.id] = enabled
+      setSystemIssuesByWorkspace((current) => ({ ...current, [currentWorkspace.id]: enabled }))
+    },
+    [currentWorkspace?.id],
+  )
   const [epics, setEpics] = useState<Epic[]>([])
+  const [availableTypes, setAvailableTypes] = useState<string[]>([])
+  const [typeCatalog, setTypeCatalog] = useState<{
+    workspaceId: string
+    status: "loading" | "retrying" | "ready" | "error"
+    message?: string
+  } | null>(null)
+  const typeCatalogReady =
+    !!typeCatalog &&
+    typeCatalog.workspaceId === currentWorkspace?.id &&
+    typeCatalog.status === "ready"
+  const typeCatalogRetrying =
+    !!typeCatalog &&
+    typeCatalog.workspaceId === currentWorkspace?.id &&
+    typeCatalog.status === "retrying"
+  const typeCatalogError =
+    typeCatalog &&
+    typeCatalog.workspaceId === currentWorkspace?.id &&
+    (typeCatalog.status === "error" || typeCatalog.status === "retrying")
+      ? (typeCatalog.message ?? "Could not load issue types")
+      : null
+  const typeCatalogRequestRef = useRef(0)
   const [isLoading, setIsLoading] = useState(true)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [loadingWorkspaceId, setLoadingWorkspaceId] = useState<string | null>(null)
@@ -191,10 +253,11 @@ export function useWorkspaceLifecycle(opts: UseWorkspaceLifecycleOpts) {
       // check (a workspace it has not verified yet, a retry, StrictMode's
       // double mount in dev), and a fresh instance would otherwise drop
       // back to the skeleton for a tree it already has.
-      const cached = sessionEpics.get(selected?.id)
+      const cached = sessionEpics.get(treeCacheKey(selected?.id, modeForWorkspace(selected?.id)))
       if (cached) {
         setEpics(cached)
-        epicsWorkspaceIdRef.current = selected?.id ?? null
+        epicsWorkspaceIdRef.current =
+          treeCacheKey(selected?.id, modeForWorkspace(selected?.id)) ?? null
         hasExistingDataRef.current = true
       }
       setCurrentWorkspace(selected)
@@ -245,12 +308,15 @@ export function useWorkspaceLifecycle(opts: UseWorkspaceLifecycleOpts) {
         // every switch drops back to the skeleton for the length of a bd +
         // Dolt round trip. hasExistingDataRef gates that skeleton (see
         // home-page's `isLoading && !hasExistingDataRef.current`).
-        const cached = sessionEpics.get(target.id)
-        epicsWorkspaceIdRef.current = target.id
+        const cached = sessionEpics.get(treeCacheKey(target.id, modeForWorkspace(target.id)))
+        epicsWorkspaceIdRef.current = cached
+          ? (treeCacheKey(target.id, modeForWorkspace(target.id)) ?? null)
+          : null
         if (cached) {
           setEpics(cached)
           hasExistingDataRef.current = true
         } else {
+          setEpics([])
           hasExistingDataRef.current = false
         }
       }),
@@ -268,9 +334,9 @@ export function useWorkspaceLifecycle(opts: UseWorkspaceLifecycleOpts) {
   // the previous workspace's tree, and storing that under the new key
   // would turn a one-frame glitch into a persistent wrong-project paint.
   useEffect(() => {
-    if (epicsWorkspaceIdRef.current !== currentWorkspace?.id) return
-    sessionEpics.set(currentWorkspace?.id, epics)
-  }, [epics, currentWorkspace?.id])
+    if (epicsWorkspaceIdRef.current !== treeCacheKey(currentWorkspace?.id, includeSystem)) return
+    sessionEpics.set(treeCacheKey(currentWorkspace?.id, includeSystem), epics)
+  }, [epics, currentWorkspace?.id, includeSystem])
 
   // Fire app_workspace_opened when a workspace STARTS loading (once per workspace.id)
   // This fires at load start so app_issues_rendered (which fires at load end) has
@@ -473,9 +539,9 @@ export function useWorkspaceLifecycle(opts: UseWorkspaceLifecycleOpts) {
 
   // Success branch: persist epics, clear flock contention, hydrate read state.
   const handleEpicsSuccess = useCallback(
-    (result: { epics: Epic[]; workspaceId?: string }) => {
+    (result: { epics: Epic[]; workspaceId?: string; includeSystem: boolean }) => {
       setEpics(result.epics)
-      epicsWorkspaceIdRef.current = result.workspaceId ?? null
+      epicsWorkspaceIdRef.current = treeCacheKey(result.workspaceId, result.includeSystem) ?? null
       hasExistingDataRef.current = true
       setHealthy()
       // Clear flock contention state on success
@@ -598,7 +664,7 @@ export function useWorkspaceLifecycle(opts: UseWorkspaceLifecycleOpts) {
     try {
       const dbPath = currentWorkspace?.databasePath
       const getEpicsStart = Date.now()
-      const result = await rpc.epics.getEpics(dbPath)
+      const result = await rpc.epics.getEpics(dbPath, includeSystem)
       if (gen !== loadGenRef.current) {
         recordLoadEpicsPhase("stale", gen, dbPathForStamp, {
           epicsLength: result.success ? result.epics.length : undefined,
@@ -611,8 +677,8 @@ export function useWorkspaceLifecycle(opts: UseWorkspaceLifecycleOpts) {
         })
         // Remember the tree so a switch back to this workspace paints
         // instantly instead of flashing the skeleton.
-        sessionEpics.set(workspaceId, result.epics)
-        handleEpicsSuccess({ epics: result.epics, workspaceId })
+        sessionEpics.set(treeCacheKey(workspaceId, includeSystem), result.epics)
+        handleEpicsSuccess({ epics: result.epics, workspaceId, includeSystem })
       } else {
         recordLoadEpicsPhase("error", gen, dbPathForStamp, {
           errorMessage: result.bdLoadError.message,
@@ -642,6 +708,7 @@ export function useWorkspaceLifecycle(opts: UseWorkspaceLifecycleOpts) {
     }
   }, [
     currentWorkspace?.databasePath,
+    includeSystem,
     handleEpicsSuccess,
     handleEpicsError,
     handleEpicsCatch,
@@ -727,17 +794,62 @@ export function useWorkspaceLifecycle(opts: UseWorkspaceLifecycleOpts) {
     }
   }, [loadEpics, isRefreshing, clearAutoRetry])
 
+  const fetchAvailableTypes = useCallback(async (workspace: Workspace, retry = false) => {
+    const request = ++typeCatalogRequestRef.current
+    setTypeCatalog((previous) => ({
+      workspaceId: workspace.id,
+      status: retry ? "retrying" : "loading",
+      message: retry && previous?.workspaceId === workspace.id ? previous.message : undefined,
+    }))
+    if (!retry) setAvailableTypes([])
+    try {
+      const types = await rpc.beads.getAvailableTypes(workspace.databasePath)
+      if (typeCatalogRequestRef.current !== request) return
+      setAvailableTypes(types)
+      setTypeCatalog({ workspaceId: workspace.id, status: "ready" })
+    } catch (error) {
+      if (typeCatalogRequestRef.current !== request) return
+      setAvailableTypes([])
+      setTypeCatalog({
+        workspaceId: workspace.id,
+        status: "error",
+        message: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }, [])
+
+  const retryAvailableTypes = useCallback(() => {
+    if (!currentWorkspace || typeCatalogRetrying) return
+    void fetchAvailableTypes(currentWorkspace, true)
+  }, [currentWorkspace, typeCatalogRetrying, fetchAvailableTypes])
+
   useEffect(() => {
     if (currentWorkspace) {
+      let active = true
       loadEpics()
       // Fetch available statuses for this workspace
-      rpc.beads.getAvailableStatuses(currentWorkspace.databasePath).then(setAvailableStatuses)
+      rpc.beads
+        .getAvailableStatuses(currentWorkspace.databasePath)
+        .then((statuses) => {
+          if (active) setAvailableStatuses(statuses)
+        })
+        .catch(() => {}) // loadEpics reports the transport error for this workspace.
       // beadbox-3qo: also fetch the ordered status.custom chain for the
       // workflow advancement button (pm/spec §4.3). Empty array = button hidden.
-      rpc.beads.getCustomStatusList(currentWorkspace.databasePath).then(setCustomStatusChain)
+      rpc.beads
+        .getCustomStatusList(currentWorkspace.databasePath)
+        .then((chain) => {
+          if (active) setCustomStatusChain(chain)
+        })
+        .catch(() => {}) // The main load supplies the visible error state.
+      void fetchAvailableTypes(currentWorkspace)
       // Expose db path for console commands
       const beadbox = ensureBeadboxStamp()
       if (beadbox) beadbox.db = currentWorkspace.databasePath
+      return () => {
+        active = false
+        typeCatalogRequestRef.current++
+      }
     }
     // bb-fvw2 defensive: depend on the workspace id and the dbPath
     // primitives, not the whole `currentWorkspace` object reference. If a
@@ -750,7 +862,7 @@ export function useWorkspaceLifecycle(opts: UseWorkspaceLifecycleOpts) {
     // flockContention toggles and this effect should only refetch on real
     // workspace switches.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional narrowing per bb-fvw2
-  }, [currentWorkspace?.id, currentWorkspace?.databasePath])
+  }, [currentWorkspace?.id, currentWorkspace?.databasePath, includeSystem])
 
   // Refetch available statuses (e.g. after user edits custom statuses in the
   // Settings → Workflow tab). Ported from v0.24 hooks/use-workspace-lifecycle
@@ -780,6 +892,13 @@ export function useWorkspaceLifecycle(opts: UseWorkspaceLifecycleOpts) {
   return {
     workspaces,
     currentWorkspace,
+    includeSystem,
+    setIncludeSystem,
+    availableTypes,
+    typeCatalogReady,
+    typeCatalogError,
+    typeCatalogRetrying,
+    retryAvailableTypes,
     epics,
     setEpics,
     isLoading,

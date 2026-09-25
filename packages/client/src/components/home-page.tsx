@@ -8,6 +8,7 @@ import { FilterBar, type Filters } from "@/components/filter-bar"
 import { Header } from "@/components/header"
 import { getAnalyticsEnabled, markAllBeadsRead, markBeadRead } from "@/lib/local-storage"
 import { safeCapture } from "@/lib/posthog-safe"
+import { isMoleculePresentation } from "@/lib/molecule-presentation"
 import { rpc } from "@/lib/rpc"
 import { sortEpics } from "@/lib/sort"
 import { useSubscriptionChangeSignal } from "@/lib/subscribe"
@@ -28,6 +29,14 @@ import { useWorkspaceLifecycle } from "@/hooks/use-workspace-lifecycle"
 import type { Bead, Epic } from "@/lib/types"
 
 const getBlocksDependencies = rpc.epics.getBlocksDependencies
+
+function readTypeFilter(workspaceId: string): string {
+  try {
+    return localStorage.getItem(`beadbox:issue-type:${workspaceId}`) || "all"
+  } catch {
+    return "all"
+  }
+}
 
 import { ArrowLeft, Loader2, RefreshCw } from "lucide-react"
 import { EpicTreeSkeleton } from "@/components/epic-tree-skeleton"
@@ -143,6 +152,13 @@ function BeadsEpicsViewer() {
   const {
     workspaces,
     currentWorkspace,
+    includeSystem,
+    setIncludeSystem,
+    availableTypes,
+    typeCatalogReady,
+    typeCatalogError,
+    typeCatalogRetrying,
+    retryAvailableTypes,
     epics,
     setEpics,
     isLoading,
@@ -194,9 +210,17 @@ function BeadsEpicsViewer() {
 
   const assignees = useMemo(() => extractAssignees(epics), [epics])
   const rigNames = useMemo(() => extractRigNames(epics), [epics])
+  const [typesByWorkspace, setTypesByWorkspace] = useState<Record<string, string>>({})
+  const selectedType = currentWorkspace
+    ? (typesByWorkspace[currentWorkspace.id] ?? readTypeFilter(currentWorkspace.id))
+    : "all"
+  const typeOptions = useMemo(
+    () => [...new Set([...availableTypes, ...epics.map((epic) => epic.type), ...flattenEpicsToBeads(epics).map((bead) => bead.type)])],
+    [availableTypes, epics],
+  )
   const filteredEpics = useMemo(
-    () => filterEpics(epics, filters, rigNames),
-    [epics, filters, rigNames],
+    () => filterEpics(epics, { ...filters, type: selectedType, includeSystem }, rigNames),
+    [epics, filters, rigNames, selectedType, includeSystem],
   )
   const sortedEpics = useMemo(() => sortEpics(filteredEpics, sort), [filteredEpics, sort])
 
@@ -211,7 +235,7 @@ function BeadsEpicsViewer() {
       sortedEpics.filter(
         (e) =>
           e.type !== "convoy" &&
-          e.type !== "molecule" &&
+          !isMoleculePresentation(e) &&
           !e.labels?.includes("archived") &&
           !isBacklogged(e),
       ),
@@ -227,7 +251,7 @@ function BeadsEpicsViewer() {
   const activeMolecules = useMemo(
     () =>
       sortedEpics.filter(
-        (e) => e.type === "molecule" && !e.labels?.includes("archived") && !isBacklogged(e),
+        (e) => isMoleculePresentation(e) && !e.labels?.includes("archived") && !isBacklogged(e),
       ),
     [sortedEpics, isBacklogged],
   )
@@ -789,6 +813,19 @@ function BeadsEpicsViewer() {
         className="flex-1 flex flex-col px-3 md:px-6 py-4 min-h-0"
         style={devConsole.open ? { marginBottom: devConsole.height } : undefined}
       >
+        {typeCatalogError && (
+          <div role="alert" className="mb-3 flex items-center justify-between gap-3 rounded border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-300">
+            <span>Could not load issue types: {typeCatalogError}. Type changes are unavailable.</span>
+            <button
+              type="button"
+              onClick={retryAvailableTypes}
+              disabled={typeCatalogRetrying}
+              className="shrink-0 rounded px-2 py-1 font-medium hover:bg-amber-500/20 disabled:cursor-wait disabled:opacity-60"
+            >
+              {typeCatalogRetrying ? "Retrying…" : "Retry"}
+            </button>
+          </div>
+        )}
         {/* Filter bar: hidden on mobile when viewing bead detail, or when toggled off via Cmd+F */}
         {filterBarVisible && !(isMobileLayout && beadIdParam) && (
           <div className="mb-4">
@@ -798,6 +835,15 @@ function BeadsEpicsViewer() {
               assignees={assignees}
               rigNames={rigNames}
               availableStatuses={availableStatuses}
+              availableTypes={typeOptions}
+              selectedType={selectedType}
+              onTypeChange={(type) => {
+                if (!currentWorkspace) return
+                try { localStorage.setItem(`beadbox:issue-type:${currentWorkspace.id}`, type) } catch { /* storage may be unavailable */ }
+                setTypesByWorkspace((current) => ({ ...current, [currentWorkspace.id]: type }))
+              }}
+              includeSystem={includeSystem}
+              onIncludeSystemChange={setIncludeSystem}
               sort={sort}
               onSortChange={setSort}
             />
@@ -830,6 +876,8 @@ function BeadsEpicsViewer() {
                   dbPath={currentWorkspace?.databasePath}
                   assignees={assignees}
                   availableStatuses={availableStatuses}
+                  availableTypes={typeOptions}
+                  typeCatalogReady={typeCatalogReady}
                   customStatusChain={customStatusChain}
                   isLoadingBead={isLoadingBead}
                   isFocused={focusedPanel === "right"}
@@ -1092,6 +1140,8 @@ function BeadsEpicsViewer() {
                   dbPath={currentWorkspace?.databasePath}
                   assignees={assignees}
                   availableStatuses={availableStatuses}
+                  availableTypes={typeOptions}
+                  typeCatalogReady={typeCatalogReady}
                   customStatusChain={customStatusChain}
                   isLoadingBead={isLoadingBead}
                   isFocused={focusedPanel === "right"}
